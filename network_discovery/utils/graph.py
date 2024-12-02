@@ -1,7 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 from utils.network import get_dns_hostname
-from utils.snmp import get_snmp_neighbors, get_local_ports
+from trash.snmp import get_snmp_neighbors, get_local_ports
 from utils.database import get_host_name_by_address
 from utils.screen import get_screen_size
 

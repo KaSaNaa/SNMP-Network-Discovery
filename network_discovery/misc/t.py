@@ -11,7 +11,7 @@ def get_windows_hostname(ip):
 
 if __name__ == "__main__":
     # Replace with your target IP
-    target_ip = "10.230.235.149"
+    target_ip = "127.0.0.1"
 
     hostname, error = get_windows_hostname(target_ip)
 
