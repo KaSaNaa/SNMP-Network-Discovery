@@ -1,7 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 from utils.network import get_dns_hostname
-from trash.snmp import get_snmp_neighbors, get_local_ports
+from snmp_toolkit import NetworkDiscovery#get_snmp_neighbors, get_local_ports
 from utils.database import get_host_name_by_address
 from utils.screen import get_screen_size
 
@@ -49,11 +49,11 @@ def build_topology(active_ips, user, auth_key, priv_key, auth_protocol, priv_pro
         remote_port_array = []
         local_port_array = []
         remote_device_array = []
-        local_ports = get_local_ports(ip, user, auth_key, priv_key, auth_protocol, priv_protocol)
+        local_ports = NetworkDiscovery.get_local_ports(ip, user, auth_key, priv_key, auth_protocol, priv_protocol)
         device_name = get_host_name_by_address(ip)
         G.add_node(device_name, label=device_name)
         print(ip + " " + device_name)
-        neighbors = get_snmp_neighbors(ip, user, auth_key, priv_key, auth_protocol, priv_protocol)
+        neighbors = NetworkDiscovery.get_snmp_neighbors(ip, user, auth_key, priv_key, auth_protocol, priv_protocol)
         for oid, value in neighbors:
             local_device = device_name
             if oid:
