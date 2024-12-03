@@ -9,7 +9,7 @@ matplotlib==3.3.4
 mysql-connector-python==8.0.23
 networkx==2.5.1
 numpy==1.19.5
-Pillow==8.4.0
+Pillow==11.0.0
 ply==3.11
 protobuf==3.19.6
 pyasn1==0.5.1
