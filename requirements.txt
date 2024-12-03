@@ -20,7 +20,7 @@ pysnmp==4.4.12
 python-dateutil==2.9.0.post0
 python-nmap==0.7.1
 pyvmomi==8.0.3.0.1
-requests==2.27.1
+requests==2.32.2
 scapy==2.5.0
 scipy==1.5.4
 screeninfo==0.8.1
