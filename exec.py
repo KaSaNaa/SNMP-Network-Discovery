@@ -6,8 +6,6 @@ from utils.network_utils import NetworkUtils
 from utils.snmp_manager import SNMPManager
 from utils.graph_manager import GraphManager
 
-continue_running = True
-
 # Function to display a rotating cursor
 def show_spinner(stop_event):
     spinner = ['|', '/', '-', '\\']
@@ -105,13 +103,13 @@ def main():
         G = graph_manager.build_topology(active_ips)
         graph_manager.draw_topology(G)
         print("Network topology graph generated and saved as network_topology.png")
-        
-    continue_running = False
 
 if __name__ == "__main__":
+    continue_running = True
     while continue_running:
         try:
             main()
+            continue_running = False
         except Exception as e:
             print(f"An error occurred: {e}")
             print("Restarting the program...\n")
