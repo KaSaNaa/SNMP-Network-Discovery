@@ -2,6 +2,7 @@ import ipaddress
 import subprocess
 import platform
 import socket
+import os
 import concurrent.futures
 
 class NetworkUtils:
@@ -21,10 +22,28 @@ class NetworkUtils:
     def save_local_ip_to_env():
         local_ip = NetworkUtils.get_local_ip()
         if local_ip:
-            with open('.env', 'a') as env_file:
-                env_file.write(f'\nDB_HOST={local_ip}\n')
+            env_file_path = '.env'
+            if os.path.exists(env_file_path):
+                with open(env_file_path, 'r') as env_file:
+                    lines = env_file.readlines()
+                
+                with open(env_file_path, 'w') as env_file:
+                    db_host_found = False
+                    for line in lines:
+                        if line.startswith('DB_HOST='):
+                            env_file.write(f'DB_HOST={local_ip}\n')
+                            db_host_found = True
+                        else:
+                            env_file.write(line)
+                    
+                    if not db_host_found:
+                        env_file.write(f'DB_HOST={local_ip}\n')
+            else:
+                with open(env_file_path, 'w') as env_file:
+                    env_file.write(f'DB_HOST={local_ip}\n')
         else:
             print("Failed to retrieve local IP address.")
+
 
     @staticmethod
     def get_dns_hostname(ip):
