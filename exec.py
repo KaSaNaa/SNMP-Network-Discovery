@@ -19,10 +19,12 @@ def show_spinner(stop_event):
 
 def main():
     # Prompt user for inputs
-    db_host = input("Enter DB Host: ")
+    db_host = input("Enter DB Host IP: ")
     db_name = input("Enter DB Name: ")
     db_user = input("Enter DB User: ")
     db_password = input("Enter DB Password: ")
+    if not db_password:
+        db_password = ""
     snmp_version = int(input("Enter SNMP Version (1, 2, or 3): "))
     
     if snmp_version in [1, 2]:
@@ -84,10 +86,7 @@ def main():
     stop_event.set()
     spinner_thread.join()
 
-    print("\n\nNeighbors for", ip)
-    print(neighbors)
-    print("Ports for", ip)
-    print(local_ports)
+    print("\nSNMP data collection complete.")
     
     save_path = input("Press Enter to save neighbors.json to the current working directory or enter a different path: ").strip()
     if not save_path:

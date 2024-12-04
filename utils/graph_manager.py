@@ -13,6 +13,7 @@ class GraphManager:
     def build_topology(self, active_ips):
         G = nx.Graph()
         NetworkUtils.save_local_ip_to_env()
+        
         for ip in active_ips:
             dns_host_name = NetworkUtils.get_dns_hostname(ip)
             print("DNS HOST NAME: " + dns_host_name)
@@ -22,8 +23,13 @@ class GraphManager:
             local_ports = self.snmp_manager.get_local_ports(ip)
             device_name = self.db_manager.get_host_name_by_address(ip)
             G.add_node(device_name, label=device_name)
+            
+            if not device_name:
+                device_name = ip
+                
             print(ip + " " + device_name)
             neighbors = self.snmp_manager.get_snmp_neighbors(ip)
+            
             for oid, value in neighbors:
                 local_device = device_name
                 if oid:
