@@ -16,7 +16,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: '3.6.8'
+        python-version: 'python-3.6.8-linux-20.04-x64'
 
     - name: Install dependencies
       run: |
