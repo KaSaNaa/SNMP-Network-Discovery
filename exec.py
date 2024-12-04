@@ -6,8 +6,6 @@ from utils.network_utils import NetworkUtils
 from utils.snmp_manager import SNMPManager
 from utils.graph_manager import GraphManager
 
-continue_running = True
-
 # Function to display a rotating cursor
 def show_spinner(stop_event):
     spinner = ['|', '/', '-', '\\']
@@ -19,10 +17,12 @@ def show_spinner(stop_event):
 
 def main():
     # Prompt user for inputs
-    db_host = input("Enter DB Host: ")
+    db_host = input("Enter DB Host IP: ")
     db_name = input("Enter DB Name: ")
     db_user = input("Enter DB User: ")
     db_password = input("Enter DB Password: ")
+    if not db_password:
+        db_password = ""
     snmp_version = int(input("Enter SNMP Version (1, 2, or 3): "))
     
     if snmp_version in [1, 2]:
@@ -84,10 +84,7 @@ def main():
     stop_event.set()
     spinner_thread.join()
 
-    print("\n\nNeighbors for", ip)
-    print(neighbors)
-    print("Ports for", ip)
-    print(local_ports)
+    print("\nSNMP data collection complete.")
     
     save_path = input("Press Enter to save neighbors.json to the current working directory or enter a different path: ").strip()
     if not save_path:
@@ -106,13 +103,13 @@ def main():
         G = graph_manager.build_topology(active_ips)
         graph_manager.draw_topology(G)
         print("Network topology graph generated and saved as network_topology.png")
-        
-    continue_running = False
 
 if __name__ == "__main__":
+    continue_running = True
     while continue_running:
         try:
             main()
+            continue_running = False
         except Exception as e:
             print(f"An error occurred: {e}")
             print("Restarting the program...\n")

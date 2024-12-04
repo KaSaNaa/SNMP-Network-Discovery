@@ -24,10 +24,7 @@ if __name__ == "__main__":
             "ports": local_ports
         }
 
-    print("\n\nNeighbors for", ip)
-    print(neighbors)
-    print("Ports for", ip)
-    print(local_ports)
+    print("\nSNMP data collection complete.")
     
     graph_manager = GraphManager(2, community="public")
     G = graph_manager.build_topology(active_ips)
