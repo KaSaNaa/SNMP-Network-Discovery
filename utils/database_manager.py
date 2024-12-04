@@ -10,6 +10,7 @@ class DatabaseManager:
         self.db_password = os.getenv('DB_PASSWORD')
 
     def get_host_name_by_address(self, host_address):
+        connection = None
         try:
             connection = mysql.connector.connect(
                 host=self.db_host,
@@ -29,7 +30,7 @@ class DatabaseManager:
             print(f"Error while connecting to MySQL: {e}")
             return None
         finally:
-            if connection.is_connected():
+            if connection and connection.is_connected():
                 cursor.close()
                 connection.close()
                 print("MySQL connection closed.")
