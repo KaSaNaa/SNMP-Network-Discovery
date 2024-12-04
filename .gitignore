@@ -4,14 +4,17 @@ __pycache__/
 
 # Ignore virtual environment directories
 venv/
+dist/
 .env/
 .env
 
 # Ignore other files and directories
 *.log
 .vscode/
+build/
 *.tmp
 network_discovery/network_discovery.py
 # network_discovery/main.py
 neighbors.json
 network_topology.png
+exec.spec
