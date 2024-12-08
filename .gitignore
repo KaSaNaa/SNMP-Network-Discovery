@@ -18,3 +18,4 @@ network_discovery/network_discovery.py
 neighbors.json
 network_topology.png
 exec.spec
+decoded_neighbors.json
