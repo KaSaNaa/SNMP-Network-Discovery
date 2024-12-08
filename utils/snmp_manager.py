@@ -1,4 +1,5 @@
 from pysnmp.hlapi import *
+import logging
 
 class SNMPManager:
     def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -9,6 +10,12 @@ class SNMPManager:
         self.priv_key = priv_key
         self.auth_protocol = auth_protocol
         self.priv_protocol = priv_protocol
+        logging.basicConfig(
+            filename='logs/snmp_errors.log',  
+            level=logging.ERROR,
+            format='%(asctime)s %(levelname)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
 
     def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1'):
         results = []
@@ -38,6 +45,11 @@ class SNMPManager:
             lexicographicMode=False,
         ):
             if errorIndication or errorStatus:
+                # Log errors into a log file
+                if errorIndication:
+                    logging.error(f'Error Indication: {errorIndication}')
+                if errorStatus:
+                    logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
                 continue
             else:
                 for varBind in varBinds:
