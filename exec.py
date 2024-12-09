@@ -1,3 +1,8 @@
+'''
+    This exec.py is solely for the building a executable file using pyinstaller.
+    It is not recommended to run this file directly even though it is possible.
+'''
+
 import json
 import os
 import threading
