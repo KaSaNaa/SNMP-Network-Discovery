@@ -1,5 +1,5 @@
 import json
-from pysnmp.hlapi import *
+from pysnmp.hlapi import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, nextCmd
 import logging
 
 class SNMPManager:
@@ -125,23 +125,36 @@ class SNMPManager:
 
         return local_ports
     
-    def recursive_discovery(self, ip, discovered_devices=None):
+    def recursive_discovery(self, ip, discovered_devices=None, discovered_ips=None):
         if discovered_devices is None:
             discovered_devices = {}
+        if discovered_ips is None:
+            discovered_ips = set()
     
         # Print the current IP being used to get neighbors
         print(f"Discovering neighbors for IP: {ip}")
     
+        # Add the current IP to the set of discovered IPs
+        discovered_ips.add(ip)
+    
         neighbors = self.get_snmp_neighbors(ip)
+        ports = self.get_local_ports(ip)
+    
+        # Store the neighbors and ports for the current IP
+        discovered_devices[ip] = {
+            "neighbors": {},
+            "ports": ports
+        }
+    
         for oid, value in neighbors:
             if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
                 neighbor_ip = self.hex_to_ip(value)
                 print(f"Found neighbor: {neighbor_ip}")
-                if neighbor_ip not in discovered_devices:
-                    discovered_devices[neighbor_ip] = oid
+                if neighbor_ip not in discovered_ips:
+                    discovered_ips.add(neighbor_ip)
                     # Recursively discover neighbors of the neighbor
-                    self.recursive_discovery(neighbor_ip, discovered_devices)
-                    
+                    discovered_devices[ip]["neighbors"][neighbor_ip] = self.recursive_discovery(neighbor_ip, {}, discovered_ips)[neighbor_ip]
+    
         return discovered_devices
 
     def hex_to_ip(self, hex_value):
