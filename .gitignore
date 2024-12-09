@@ -19,3 +19,4 @@ neighbors.json
 network_topology.png
 exec.spec
 decoded_neighbors.json
+snmp_discovery.json
