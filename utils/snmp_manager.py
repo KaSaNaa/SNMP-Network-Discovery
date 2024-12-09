@@ -1,3 +1,4 @@
+import json
 from pysnmp.hlapi import *
 import logging
 
@@ -17,7 +18,7 @@ class SNMPManager:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
-    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1'):
+    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1'): # .1.3.6.1.2.1.2.2.1 for ifTable
         results = []
         if self.version == 1 or self.version == 2:
             if not self.community:
@@ -123,3 +124,28 @@ class SNMPManager:
                     local_ports[port_index] = value_str
 
         return local_ports
+    
+    def recursive_discovery(self, ip, discovered_devices=None):
+        if discovered_devices is None:
+            discovered_devices = {}
+    
+        # Print the current IP being used to get neighbors
+        print(f"Discovering neighbors for IP: {ip}")
+    
+        neighbors = self.get_snmp_neighbors(ip)
+        for oid, value in neighbors:
+            if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
+                neighbor_ip = self.hex_to_ip(value)
+                print(f"Found neighbor: {neighbor_ip}")
+                if neighbor_ip not in discovered_devices:
+                    discovered_devices[neighbor_ip] = oid
+                    # Recursively discover neighbors of the neighbor
+                    self.recursive_discovery(neighbor_ip, discovered_devices)
+                    
+        return discovered_devices
+
+    def hex_to_ip(self, hex_value):
+        # Convert hex string to IP address
+        hex_value = hex_value.replace("0x", "")
+        ip_parts = [str(int(hex_value[i:i+2], 16)) for i in range(0, len(hex_value), 2)]
+        return ".".join(ip_parts)
