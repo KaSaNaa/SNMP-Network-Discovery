@@ -1,5 +1,5 @@
 import json
-from pysnmp.hlapi import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, nextCmd
+from pysnmp.hlapi import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, nextCmd, getCmd
 import logging
 
 class SNMPManager:
@@ -18,7 +18,7 @@ class SNMPManager:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
-    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1'): # .1.3.6.1.2.1.2.2.1 for ifTable
+    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
         results = []
         if self.version == 1 or self.version == 2:
             if not self.community:
@@ -36,14 +36,16 @@ class SNMPManager:
             )
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
-
-        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+    
+        cmd = nextCmd if use_next_cmd else getCmd
+    
+        for errorIndication, errorStatus, errorIndex, varBinds in cmd(
             SnmpEngine(),
             user_data,
             UdpTransportTarget((target, 161)),
             ContextData(),
             ObjectType(ObjectIdentity(base_oid)),
-            lexicographicMode=False,
+            lexicographicMode=False if use_next_cmd else True,
         ):
             if errorIndication or errorStatus:
                 # Log errors into a log file
@@ -57,7 +59,7 @@ class SNMPManager:
                     oid_str, value_str = varBind
                     results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
         return results
-
+    
     def get_snmp_neighbors(self, ip):
         neighbors = []
 
@@ -137,11 +139,16 @@ class SNMPManager:
         # Add the current IP to the set of discovered IPs
         discovered_ips.add(ip)
     
+        # Get the hostname of the current IP
+        hostname_result = self.snmp_discovery(ip, "1.3.6.1.2.1.1.5.0", False)
+        hostname = hostname_result[0][1] if hostname_result else "Unknown"
+    
         neighbors = self.get_snmp_neighbors(ip)
         ports = self.get_local_ports(ip)
     
-        # Store the neighbors and ports for the current IP
+        # Store the neighbors, ports, and hostname for the current IP
         discovered_devices[ip] = {
+            "hostname": hostname,
             "neighbors": {},
             "ports": ports
         }
