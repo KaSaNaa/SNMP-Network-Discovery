@@ -240,10 +240,10 @@ class SNMPManager:
         # Iterate through neighbors to identify connections
         for oid, value in neighbors:
             if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
-                neighbor_ip = self.hex_to_ip(value)
+                neighbor_ip = self.__hex_to_ip(value)
                 local_port_oid = oid.split(".")[-1]  # Get port index from OID
                 local_port_name = ports.get(local_port_oid, "Unknown")
-                print(f"Local Port: {local_port_oid}:{local_port_name}")
+                # print(f"Local Port: {local_port_oid}:{local_port_name}")
                 # Get the remote interface name (via LLDP/CDP, or mock if unavailable)
                 remote_interface = self.get_remote_interface(neighbor_ip, ip, local_port_oid)
 
@@ -258,7 +258,9 @@ class SNMPManager:
                     }
 
         return discovered_devices
-
+    
+    def __is_protocol_not_enabled(self, result):
+        return result and result[0][1] == "No Such Instance currently exists at this OID"
 
     def get_remote_interface(self, neighbor_ip, source_ip, local_port_oid):
         """
@@ -275,25 +277,33 @@ class SNMPManager:
         """
         # LLDP OID
         lldp_remote_oid = f"1.0.8802.1.1.2.1.4.1.1.7.{local_port_oid}"
-
+        
         # CDP OID
         cdp_remote_oid = f".1.3.6.1.4.1.9.9.23.1.2.1.1.6.{local_port_oid}"
-
+        
         # Try LLDP first
         remote_interface_result = self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
-        if not remote_interface_result or remote_interface_result[0][1] == "No Such Instance currently exists at this OID":
-            # Fallback to CDP
+        
+        if self.__is_protocol_not_enabled(remote_interface_result):
+            print("LLDP is not enabled on the interfaces of the target device!")
+            return "LLDP is not enabled on the interface."
+        
+        # Fallback to CDP if LLDP fails
+        if not remote_interface_result:
             remote_interface_result = self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
         
-        if not remote_interface_result or remote_interface_result[0][1] == "No Such Instance currently exists at this OID":
+            if self.__is_protocol_not_enabled(remote_interface_result):
+                print("CDP is not enabled on the interfaces of the target device!")
+                return "CDP is not enabled on the interface."
+        else:
             # If both LLDP and CDP fail, return 'Unknown'
             return "Unknown"
 
         print(json.dumps(remote_interface_result, indent=4))
-        return remote_interface_result[0][1] if remote_interface_result else "Unknown"
+        return remote_interface_result[0][1]
 
 
-    def hex_to_ip(self, hex_value):
+    def __hex_to_ip(self, hex_value):
         """
         Convert a hexadecimal string to an IP address.
 
