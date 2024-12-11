@@ -2,6 +2,7 @@ import logging, json
 from pysnmp.hlapi import CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
 from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
 from pysnmp.hlapi import usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
+from utils.misc import ensure_directory_exists
 
 class SNMPManager:
     def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -28,12 +29,16 @@ class SNMPManager:
         # Validate SNMPv3 parameters
         if self.version == 3:
             self.__validate_snmpv3_params()
+            
+        log_path = 'logs/snmp_errors.log'
+        
+        ensure_directory_exists(log_path)
 
         logging.basicConfig(
-            filename='logs/snmp_errors.log',  
-            level=logging.ERROR,
-            format='%(asctime)s %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            filename = log_path,  
+            level = logging.ERROR,
+            format = '%(asctime)s %(levelname)s: %(message)s',
+            datefmt = '%Y-%m-%d %H:%M:%S'
         )
 
     def __validate_snmpv3_params(self):
