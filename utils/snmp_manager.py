@@ -1,4 +1,6 @@
-from pysnmp.hlapi import *
+import json
+from pysnmp.hlapi import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, nextCmd, getCmd
+import logging
 
 class SNMPManager:
     def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -9,8 +11,15 @@ class SNMPManager:
         self.priv_key = priv_key
         self.auth_protocol = auth_protocol
         self.priv_protocol = priv_protocol
+        logging.basicConfig(
+            filename='logs/snmp_errors.log',  
+            level=logging.ERROR,
+            format='%(asctime)s %(levelname)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
 
-    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1'):
+
+    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
         results = []
         if self.version == 1 or self.version == 2:
             if not self.community:
@@ -28,23 +37,31 @@ class SNMPManager:
             )
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
-
-        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+    
+        cmd = nextCmd if use_next_cmd else getCmd
+    
+        for errorIndication, errorStatus, errorIndex, varBinds in cmd(
             SnmpEngine(),
             user_data,
             UdpTransportTarget((target, 161)),
             ContextData(),
             ObjectType(ObjectIdentity(base_oid)),
-            lexicographicMode=False,
+            lexicographicMode=False if use_next_cmd else True,
         ):
             if errorIndication or errorStatus:
+                # Log errors into a log file
+                if errorIndication:
+                    logging.error(f'Error Indication: {errorIndication}')
+                if errorStatus:
+                    logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
                 continue
             else:
                 for varBind in varBinds:
                     oid_str, value_str = varBind
                     results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
         return results
-
+    
+    
     def get_snmp_neighbors(self, ip):
         neighbors = []
 
@@ -60,6 +77,7 @@ class SNMPManager:
         neighbors.extend(get_cdp_neighbors())
 
         return neighbors
+
 
     def get_local_ports(self, target):
         local_ports = {}
@@ -111,3 +129,84 @@ class SNMPManager:
                     local_ports[port_index] = value_str
 
         return local_ports
+    
+    
+    def recursive_discovery(self, ip, discovered_devices=None, discovered_ips=None):
+        if discovered_devices is None:
+            discovered_devices = {}
+        if discovered_ips is None:
+            discovered_ips = set()
+
+        print(f"Discovering neighbors for IP: {ip}")
+
+        # Add the current IP to the set of discovered IPs
+        discovered_ips.add(ip)
+
+        # Get the hostname of the current IP
+        hostname_result = self.snmp_discovery(ip, "1.3.6.1.2.1.1.5.0", False)
+        hostname = hostname_result[0][1] if hostname_result else "Unknown"
+
+        # Get the neighbors and local ports
+        neighbors = self.get_snmp_neighbors(ip)
+        ports = self.get_local_ports(ip)
+
+        # Store the neighbors, ports, and hostname for the current IP
+        discovered_devices[ip] = {
+            "hostname": hostname,
+            "neighbors": {},
+            "ports": ports
+        }
+
+        # Iterate through neighbors to identify connections
+        for oid, value in neighbors:
+            if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
+                neighbor_ip = self.hex_to_ip(value)
+                local_port_oid = oid.split(".")[-1]  # Get port index from OID
+                local_port_name = ports.get(local_port_oid, "Unknown")
+                print(f"Local Port: {local_port_oid}:{local_port_name}")
+                # Get the remote interface name (via LLDP/CDP, or mock if unavailable)
+                remote_interface = self.get_remote_interface(neighbor_ip, ip, local_port_oid)
+
+                if neighbor_ip not in discovered_ips:
+                    discovered_ips.add(neighbor_ip)
+
+                    # Recursively discover neighbors of the neighbor
+                    discovered_devices[ip]["neighbors"][neighbor_ip] = {
+                        "local_interface": local_port_name,
+                        "remote_interface": remote_interface,
+                        "details": self.recursive_discovery(neighbor_ip, {}, discovered_ips)[neighbor_ip]
+                    }
+
+        return discovered_devices
+
+
+    def get_remote_interface(self, neighbor_ip, source_ip, local_port_oid):
+        """
+        Retrieve the remote interface name for the connection between `source_ip`
+        and `neighbor_ip`. Fallback to 'Unknown' if details are unavailable.
+        """
+        # LLDP OID
+        lldp_remote_oid = f"1.0.8802.1.1.2.1.4.1.1.7.{local_port_oid}"
+
+        # CDP OID
+        cdp_remote_oid = f".1.3.6.1.4.1.9.9.23.1.2.1.1.6.{local_port_oid}"
+
+        # Try LLDP first
+        remote_interface_result = self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
+        if not remote_interface_result or remote_interface_result[0][1] == "No Such Instance currently exists at this OID":
+            # Fallback to CDP
+            remote_interface_result = self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
+        
+        if not remote_interface_result or remote_interface_result[0][1] == "No Such Instance currently exists at this OID":
+            # If both LLDP and CDP fail, return 'Unknown'
+            return "Unknown"
+
+        print(json.dumps(remote_interface_result, indent=4))
+        return remote_interface_result[0][1] if remote_interface_result else "Unknown"
+
+
+    def hex_to_ip(self, hex_value):
+        # Convert hex string to IP address
+        hex_value = hex_value.replace("0x", "")
+        ip_parts = [str(int(hex_value[i:i+2], 16)) for i in range(0, len(hex_value), 2)]
+        return ".".join(ip_parts)
