@@ -1,4 +1,4 @@
-from utils.database_manager import DatabaseManager
+from core.database_manager import DatabaseManager
 
 def main_test():
     db_manager = DatabaseManager()
