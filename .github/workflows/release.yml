@@ -6,25 +6,16 @@ on:
       - 'v*.*.*'  # Trigger the workflow on version tags
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-20.04
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
 
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.6.8'
-
-    - name: Install dependencies
+    - name: Zip source code
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Build executable
-      run: pyinstaller --onefile exec.py
+        zip -r source_code.zip .
 
     - name: Create release
       id: create_release
@@ -43,6 +34,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: dist/exec
-        asset_name: exec
-        asset_content_type: application/octet-stream
+        asset_path: source_code.zip
+        asset_name: source_code.zip
+        asset_content_type: application/zip
