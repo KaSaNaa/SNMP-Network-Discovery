@@ -1,6 +1,7 @@
-import json
-from pysnmp.hlapi import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, nextCmd, getCmd
-import logging
+import logging, json
+from pysnmp.hlapi import CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
+from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
+from pysnmp.hlapi import usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
 
 class SNMPManager:
     def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -23,12 +24,33 @@ class SNMPManager:
         self.priv_key = priv_key
         self.auth_protocol = auth_protocol
         self.priv_protocol = priv_protocol
+
+        # Validate SNMPv3 parameters
+        if self.version == 3:
+            self.__validate_snmpv3_params()
+
         logging.basicConfig(
             filename='logs/snmp_errors.log',  
             level=logging.ERROR,
             format='%(asctime)s %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
+
+    def __validate_snmpv3_params(self):
+        """
+        Validate SNMPv3 parameters to ensure they are correct objects required by UsmUserData.
+        """
+        if not self.user or not self.auth_key or not self.priv_key or not self.auth_protocol or not self.priv_protocol:
+            raise ValueError("User, auth_key, priv_key, auth_protocol, and priv_protocol are required for SNMPv3")
+
+        valid_auth_protocols = [usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol]
+        valid_priv_protocols = [usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol]
+
+        if self.auth_protocol not in valid_auth_protocols:
+            raise ValueError(f"Invalid auth_protocol: {self.auth_protocol}. Must be one of {valid_auth_protocols}")
+
+        if self.priv_protocol not in valid_priv_protocols:
+            raise ValueError(f"Invalid priv_protocol: {self.priv_protocol}. Must be one of {valid_priv_protocols}")
 
 
     def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
@@ -298,9 +320,12 @@ class SNMPManager:
         else:
             # If both LLDP and CDP fail, return 'Unknown'
             return "Unknown"
-
-        print(json.dumps(remote_interface_result, indent=4))
-        return remote_interface_result[0][1]
+        
+        if remote_interface_result and len(remote_interface_result) > 0 and len(remote_interface_result[0]) > 1:
+            print(json.dumps(remote_interface_result, indent=4))
+            return remote_interface_result[0][1]
+        else:
+            return "Unknown"
 
 
     def __hex_to_ip(self, hex_value):
