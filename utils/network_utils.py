@@ -8,6 +8,19 @@ import concurrent.futures
 class NetworkUtils:
     @staticmethod
     def get_local_ip():
+        """
+        Get the local IP address of the machine.
+
+        This function creates a UDP socket connection to a public DNS server (8.8.8.8)
+        to determine the local IP address of the machine. The socket is closed after
+        retrieving the IP address.
+
+        Returns:
+            str: The local IP address of the machine, or None if an error occurs.
+
+        Raises:
+            Exception: If there is an error in creating the socket or retrieving the IP address.
+        """
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -20,6 +33,12 @@ class NetworkUtils:
 
     @staticmethod
     def save_local_ip_to_env():
+        """
+        Retrieves the local IP address using NetworkUtils.get_local_ip() and saves it to a .env file as the value of DB_HOST.
+        If the .env file already exists, it updates the DB_HOST entry with the local IP address. If the DB_HOST entry does not exist, it adds it.
+        If the .env file does not exist, it creates the file and adds the DB_HOST entry with the local IP address.
+        If the local IP address cannot be retrieved, it prints an error message.
+        """
         local_ip = NetworkUtils.get_local_ip()
         if local_ip:
             env_file_path = '.env'
@@ -47,6 +66,15 @@ class NetworkUtils:
 
     @staticmethod
     def get_dns_hostname(ip):
+        """
+        Resolves the DNS hostname for a given IP address.
+
+        Args:
+            ip (str): The IP address to resolve.
+
+        Returns:
+            str: The short hostname if resolution is successful, otherwise the original IP address.
+        """
         try:
             hostname, _, _ = socket.gethostbyaddr(ip)
             short_hostname = hostname.split(".")[0]
@@ -56,6 +84,27 @@ class NetworkUtils:
 
     @staticmethod
     def ping_ip(ip_str):
+        """
+        Ping an IP address to check its availability.
+
+        Args:
+            ip_str (str): The IP address to ping.
+
+        Returns:
+            str: The IP address if the ping is successful.
+            None: If the ping fails or the IP address is invalid.
+
+        Raises:
+            ValueError: If the provided IP address is not valid.
+
+        Example:
+            >>> ping_ip("192.168.1.1")
+            '192.168.1.1'
+            
+            >>> ping_ip("256.256.256.256")
+            Invalid IP address '256.256.256.256': ...
+            None
+        """
         try:
             ipaddress.ip_address(ip_str)
             system = platform.system()
@@ -68,6 +117,18 @@ class NetworkUtils:
 
     @staticmethod
     def get_ips_from_subnets(subnets):
+        """
+        Generate a list of all possible IP addresses from a list of subnets.
+
+        Args:
+            subnets (list of str): A list of subnet strings in CIDR notation.
+
+        Returns:
+            list of str: A list of IP addresses as strings.
+
+        Raises:
+            ValueError: If any of the subnet strings are invalid.
+        """
         all_ips = []
         for subnet in subnets:
             try:
@@ -79,6 +140,15 @@ class NetworkUtils:
 
     @staticmethod
     def scan_subnet(ip_list):
+        """
+        Scans a list of IP addresses to determine which ones are active.
+
+        Args:
+            ip_list (list): A list of IP addresses to scan.
+
+        Returns:
+            list: A list of active IP addresses.
+        """
         active_ips = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(NetworkUtils.ping_ip, ip): ip for ip in ip_list}
