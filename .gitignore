@@ -7,7 +7,7 @@ venv/
 dist/
 .env/
 .env
-
+env/
 # Ignore other files and directories
 *.log
 .vscode/
