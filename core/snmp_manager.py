@@ -2,7 +2,7 @@ import logging, json
 from pysnmp.hlapi import CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
 from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
 from pysnmp.hlapi import usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
-from core.utils import ensure_directory_exists
+from core.utils import ensure_directory_exists, validate_ip_address
 
 class SNMPManager:
     def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -91,25 +91,28 @@ class SNMPManager:
         cmd = nextCmd if use_next_cmd else getCmd
     
         try:
-            for errorIndication, errorStatus, errorIndex, varBinds in cmd(
-                SnmpEngine(),
-                user_data,
-                UdpTransportTarget((target, 161)),
-                ContextData(),
-                ObjectType(ObjectIdentity(base_oid)),
-                lexicographicMode=False if use_next_cmd else True,
-            ):
-                if errorIndication or errorStatus:
-                    # Log errors into a log file
-                    if errorIndication:
-                        logging.error(f'Error Indication: {errorIndication}')
-                    if errorStatus:
-                        logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
-                    continue
-                else:
-                    for varBind in varBinds:
-                        oid_str, value_str = varBind
-                        results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+            if(validate_ip_address(target)):
+                for errorIndication, errorStatus, errorIndex, varBinds in cmd(
+                    SnmpEngine(),
+                    user_data,
+                    UdpTransportTarget((target, 161)),
+                    ContextData(),
+                    ObjectType(ObjectIdentity(base_oid)),
+                    lexicographicMode=False if use_next_cmd else True,
+                ):
+                    if errorIndication or errorStatus:
+                        # Log errors into a log file
+                        if errorIndication:
+                            logging.error(f'Error Indication: {errorIndication}')
+                        if errorStatus:
+                            logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
+                        continue
+                    else:
+                        for varBind in varBinds:
+                            oid_str, value_str = varBind
+                            results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+            else:
+                raise ValueError("Invalid IP address")
         except Exception as e:
             print("Error:", e)
         return results
@@ -126,19 +129,21 @@ class SNMPManager:
             list: A list of neighbors discovered via SNMP using LLDP and CDP protocols.
         """
         neighbors = []
+        if (validate_ip_address(ip)):
+            def get_lldp_neighbors():
+                lldp_oid = "1.0.8802.1.1.2.1.4"
+                return self.snmp_discovery(ip, lldp_oid)
 
-        def get_lldp_neighbors():
-            lldp_oid = "1.0.8802.1.1.2.1.4"
-            return self.snmp_discovery(ip, lldp_oid)
+            def get_cdp_neighbors():
+                cdp_oid = ".1.3.6.1.4.1.9.9.23.1.2.1"
+                return self.snmp_discovery(ip, cdp_oid)
 
-        def get_cdp_neighbors():
-            cdp_oid = ".1.3.6.1.4.1.9.9.23.1.2.1"
-            return self.snmp_discovery(ip, cdp_oid)
+            neighbors.extend(get_lldp_neighbors())
+            neighbors.extend(get_cdp_neighbors())
 
-        neighbors.extend(get_lldp_neighbors())
-        neighbors.extend(get_cdp_neighbors())
-
-        return neighbors
+            return neighbors
+        else:
+            raise ValueError("Invalid IP address")
 
 
     def get_local_ports(self, target):
@@ -179,34 +184,37 @@ class SNMPManager:
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
 
-        try:    
-            for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
-                SnmpEngine(),
-                user_data,
-                UdpTransportTarget((target, 161)),
-                ContextData(),
-                ObjectType(ObjectIdentity(if_descr_oid)),
-                lexicographicMode=False,
-            ):
-                if errorIndication:
-                    print(f"Error: {errorIndication}")
-                    break
-                elif errorStatus:
-                    print(
-                        "%s at %s"
-                        % (
-                            errorStatus.prettyPrint(),
-                            errorIndex and varBinds[int(errorIndex) - 1][0] or "?",
+        try:
+            if(validate_ip_address(target)):
+                for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+                    SnmpEngine(),
+                    user_data,
+                    UdpTransportTarget((target, 161)),
+                    ContextData(),
+                    ObjectType(ObjectIdentity(if_descr_oid)),
+                    lexicographicMode=False,
+                ):
+                    if errorIndication:
+                        print(f"Error: {errorIndication}")
+                        break
+                    elif errorStatus:
+                        print(
+                            "%s at %s"
+                            % (
+                                errorStatus.prettyPrint(),
+                                errorIndex and varBinds[int(errorIndex) - 1][0] or "?",
+                            )
                         )
-                    )
-                    break
-                elif varBinds:
-                    for varBind in varBinds:
-                        oid, value = varBind
-                        oid_str = oid.prettyPrint()
-                        value_str = value.prettyPrint()
-                        port_index = oid_str.split(".")[-1]
-                        local_ports[port_index] = value_str
+                        break
+                    elif varBinds:
+                        for varBind in varBinds:
+                            oid, value = varBind
+                            oid_str = oid.prettyPrint()
+                            value_str = value.prettyPrint()
+                            port_index = oid_str.split(".")[-1]
+                            local_ports[port_index] = value_str
+            else:
+                raise ValueError("Invalid IP address")
         except Exception as e:
             print("Error:", e)
 
@@ -245,52 +253,55 @@ class SNMPManager:
                 },
                 ...
         """
-        if discovered_devices is None:
-            discovered_devices = {}
-        if discovered_ips is None:
-            discovered_ips = set()
+        if (validate_ip_address(ip)):
+            if discovered_devices is None:
+                discovered_devices = {}
+            if discovered_ips is None:
+                discovered_ips = set()
 
-        print(f"Discovering neighbors for IP: {ip}")
+            print(f"Discovering neighbors for IP: {ip}")
 
-        # Add the current IP to the set of discovered IPs
-        discovered_ips.add(ip)
+            # Add the current IP to the set of discovered IPs
+            discovered_ips.add(ip)
 
-        # Get the hostname of the current IP
-        hostname_result = self.snmp_discovery(ip, "1.3.6.1.2.1.1.5.0", False)
-        hostname = hostname_result[0][1] if hostname_result else "Unknown"
+            # Get the hostname of the current IP
+            hostname_result = self.snmp_discovery(ip, "1.3.6.1.2.1.1.5.0", False)
+            hostname = hostname_result[0][1] if hostname_result else "Unknown"
 
-        # Get the neighbors and local ports
-        neighbors = self.get_snmp_neighbors(ip)
-        ports = self.get_local_ports(ip)
+            # Get the neighbors and local ports
+            neighbors = self.get_snmp_neighbors(ip)
+            ports = self.get_local_ports(ip)
 
-        # Store the neighbors, ports, and hostname for the current IP
-        discovered_devices[ip] = {
-            "hostname": hostname,
-            "neighbors": {},
-            "ports": ports
-        }
+            # Store the neighbors, ports, and hostname for the current IP
+            discovered_devices[ip] = {
+                "hostname": hostname,
+                "neighbors": {},
+                "ports": ports
+            }
 
-        # Iterate through neighbors to identify connections
-        for oid, value in neighbors:
-            if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
-                neighbor_ip = self.__hex_to_ip(value)
-                local_port_oid = oid.split(".")[-1]  # Get port index from OID
-                local_port_name = ports.get(local_port_oid, "Unknown")
-                # print(f"Local Port: {local_port_oid}:{local_port_name}")
-                # Get the remote interface name (via LLDP/CDP, or mock if unavailable)
-                remote_interface = self.get_remote_interface(neighbor_ip, ip, local_port_oid)
+            # Iterate through neighbors to identify connections
+            for oid, value in neighbors:
+                if oid.startswith("SNMPv2-SMI::enterprises.9.9.23.1.2.1.1.4"):
+                    neighbor_ip = self.__hex_to_ip(value)
+                    local_port_oid = oid.split(".")[-1]  # Get port index from OID
+                    local_port_name = ports.get(local_port_oid, "Unknown")
+                    # print(f"Local Port: {local_port_oid}:{local_port_name}")
+                    # Get the remote interface name (via LLDP/CDP, or mock if unavailable)
+                    remote_interface = self.get_remote_interface(neighbor_ip, ip, local_port_oid)
 
-                if neighbor_ip not in discovered_ips:
-                    discovered_ips.add(neighbor_ip)
+                    if neighbor_ip not in discovered_ips:
+                        discovered_ips.add(neighbor_ip)
 
-                    # Recursively discover neighbors of the neighbor
-                    discovered_devices[ip]["neighbors"][neighbor_ip] = {
-                        "local_interface": local_port_name,
-                        "remote_interface": remote_interface,
-                        "details": self.recursive_discovery(neighbor_ip, {}, discovered_ips)[neighbor_ip]
-                    }
+                        # Recursively discover neighbors of the neighbor
+                        discovered_devices[ip]["neighbors"][neighbor_ip] = {
+                            "local_interface": local_port_name,
+                            "remote_interface": remote_interface,
+                            "details": self.recursive_discovery(neighbor_ip, {}, discovered_ips)[neighbor_ip]
+                        }
 
-        return discovered_devices
+            return discovered_devices
+        else:
+            raise ValueError("Invalid IP address")
     
     def __is_protocol_not_enabled(self, result):
         return result and result[0][1] == "No Such Instance currently exists at this OID"
@@ -314,29 +325,32 @@ class SNMPManager:
         # CDP OID
         cdp_remote_oid = f".1.3.6.1.4.1.9.9.23.1.2.1.1.6.{local_port_oid}"
         
-        # Try LLDP first
-        remote_interface_result = self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
-        
-        if self.__is_protocol_not_enabled(remote_interface_result):
-            print("LLDP is not enabled on the interfaces of the target device!")
-            return "LLDP is not enabled on the interface."
-        
-        # Fallback to CDP if LLDP fails
-        if not remote_interface_result:
-            remote_interface_result = self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
-        
+        if validate_ip_address(neighbor_ip) and validate_ip_address(source_ip):
+            # Try LLDP first
+            remote_interface_result = self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
+            
             if self.__is_protocol_not_enabled(remote_interface_result):
-                print("CDP is not enabled on the interfaces of the target device!")
-                return "CDP is not enabled on the interface."
+                print("LLDP is not enabled on the interfaces of the target device!")
+                return "LLDP is not enabled on the interface."
+            
+            # Fallback to CDP if LLDP fails
+            if not remote_interface_result:
+                remote_interface_result = self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
+            
+                if self.__is_protocol_not_enabled(remote_interface_result):
+                    print("CDP is not enabled on the interfaces of the target device!")
+                    return "CDP is not enabled on the interface."
+            else:
+                # If both LLDP and CDP fail, return 'Unknown'
+                return "Unknown"
+            
+            if remote_interface_result and len(remote_interface_result) > 0 and len(remote_interface_result[0]) > 1:
+                print(json.dumps(remote_interface_result, indent=4))
+                return remote_interface_result[0][1]
+            else:
+                return "Unknown"
         else:
-            # If both LLDP and CDP fail, return 'Unknown'
-            return "Unknown"
-        
-        if remote_interface_result and len(remote_interface_result) > 0 and len(remote_interface_result[0]) > 1:
-            print(json.dumps(remote_interface_result, indent=4))
-            return remote_interface_result[0][1]
-        else:
-            return "Unknown"
+            raise ValueError("Invalid IP address")
 
 
     def __hex_to_ip(self, hex_value):
