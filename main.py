@@ -6,6 +6,16 @@ from core.graph_manager import GraphManager
 from core.utils import ensure_directory_exists
 from dotenv import load_dotenv
 
+import logging
+
+logging.basicConfig(
+    filename='app.log', level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger()
+
 # Load environment variables
 load_dotenv()
 
@@ -40,7 +50,7 @@ if __name__ == "__main__":
     with open('/opt/sipmontopology/cron_data.json') as json_file:
         data = json.load(json_file)
         hostgroups = data['hostgroups']
-        
+        logger.info("Discovery on hostgroups")
         for hostgroup in hostgroups:
             hosts = hostgroup['hosts']
             devices = []
@@ -54,6 +64,7 @@ if __name__ == "__main__":
             })
     
     with open(output_file_path, 'w') as json_file:
+          print('Writing output to file data/discoverd_devices.json')
           json.dump(payload, json_file, indent=4)
     
     # ----------------------------------------------------------------
