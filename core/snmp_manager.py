@@ -90,25 +90,29 @@ class SNMPManager:
     
         cmd = nextCmd if use_next_cmd else getCmd
     
-        for errorIndication, errorStatus, errorIndex, varBinds in cmd(
-            SnmpEngine(),
-            user_data,
-            UdpTransportTarget((target, 161)),
-            ContextData(),
-            ObjectType(ObjectIdentity(base_oid)),
-            lexicographicMode=False if use_next_cmd else True,
-        ):
-            if errorIndication or errorStatus:
-                # Log errors into a log file
-                if errorIndication:
-                    logging.error(f'Error Indication: {errorIndication}')
-                if errorStatus:
-                    logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
-                continue
-            else:
-                for varBind in varBinds:
-                    oid_str, value_str = varBind
-                    results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+        try:
+            for errorIndication, errorStatus, errorIndex, varBinds in cmd(
+                SnmpEngine(),
+                user_data,
+                UdpTransportTarget((target, 161)),
+                ContextData(),
+                ObjectType(ObjectIdentity(base_oid)),
+                lexicographicMode=False if use_next_cmd else True,
+            ):
+                if errorIndication or errorStatus:
+                    # Log errors into a log file
+                    if errorIndication:
+                        logging.error(f'Error Indication: {errorIndication}')
+                    if errorStatus:
+                        logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
+                    continue
+                else:
+                    for varBind in varBinds:
+                        oid_str, value_str = varBind
+                        results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+        except Exception as e:
+            print("Error SNMP:", e)
+            return results
         return results
     
     
@@ -176,33 +180,24 @@ class SNMPManager:
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
 
-        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
-            SnmpEngine(),
-            user_data,
-            UdpTransportTarget((target, 161)),
-            ContextData(),
-            ObjectType(ObjectIdentity(if_descr_oid)),
-            lexicographicMode=False,
-        ):
-            if errorIndication:
-                print(f"Error: {errorIndication}")
-                break
-            elif errorStatus:
-                print(
-                    "%s at %s"
-                    % (
-                        errorStatus.prettyPrint(),
-                        errorIndex and varBinds[int(errorIndex) - 1][0] or "?",
-                    )
-                )
-                break
-            elif varBinds:
-                for varBind in varBinds:
-                    oid, value = varBind
-                    oid_str = oid.prettyPrint()
-                    value_str = value.prettyPrint()
-                    port_index = oid_str.split(".")[-1]
-                    local_ports[port_index] = value_str
+        try:    
+            for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+                SnmpEngine(),
+                user_data,
+                UdpTransportTarget((target, 161)),
+                ContextData(),
+                ObjectType(ObjectIdentity(if_descr_oid)),
+                lexicographicMode=False,
+            ):
+                if varBinds:
+                    for varBind in varBinds:
+                        oid, value = varBind
+                        oid_str = oid.prettyPrint()
+                        value_str = value.prettyPrint()
+                        port_index = oid_str.split(".")[-1]
+                        local_ports[port_index] = value_str
+        except Exception as e:
+            print("Error new:", e)
 
         return local_ports
     
@@ -283,7 +278,6 @@ class SNMPManager:
                         "remote_interface": remote_interface,
                         "details": self.recursive_discovery(neighbor_ip, {}, discovered_ips)[neighbor_ip]
                     }
-
         return discovered_devices
     
     def __is_protocol_not_enabled(self, result):
