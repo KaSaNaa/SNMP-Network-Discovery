@@ -19,24 +19,24 @@ logger = logging.getLogger()
 # Load environment variables
 load_dotenv()
 
+snmp_version = os.getenv('SNMP_VERSION')
+snmp_community = os.getenv('SNMP_COMMUNITY')
+snmp_port = os.getenv('SNMP_PORT')
+auth_protocol = os.getenv('AUTH_PROTOCOL')
+privacy_protocol = os.getenv('PRIVACY_PROTOCOL')
+auth_password = os.getenv('AUTH_PASSWORD')
+privacy_password = os.getenv('PRIVACY_PASSWORD')
+
 # Example usage
 if __name__ == "__main__":
     # Comment this line to run the code block below
-    snmp_manager = SNMPManager(version=2, community='public')
+    snmp_manager = SNMPManager(version=snmp_version, community=snmp_community, port=snmp_port, auth_protocol=auth_protocol, auth_password=auth_password, privacy_protocol=privacy_protocol, privacy_password=privacy_password)
     
     output_file_path = 'data/discovered_devices.json'
     
     ensure_directory_exists(output_file_path)
     
     payload = []
-    
-    snmp_version = os.getenv('SNMP_VERSION')
-    snmp_community = os.getenv('SNMP_COMMUNITY')
-    snmp_port = os.getenv('SNMP_PORT')
-    auth_protocol = os.getenv('AUTH_PROTOCOL')
-    privacy_protocol = os.getenv('PRIVACY_PROTOCOL')
-    auth_password = os.getenv('AUTH_PASSWORD')
-    privacy_password = os.getenv('PRIVACY_PASSWORD')
     
     # Set SNMP version and authentication/privacy settings based on environment variables
     if snmp_version == '3':
