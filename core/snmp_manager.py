@@ -1,7 +1,13 @@
 import logging, json
-from pysnmp.hlapi import CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
-from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
-from pysnmp.hlapi import usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
+try:
+    from pysnmp.hlapi.v3arch.sync import *
+    from pysnmp.smi.rfc1902 import ObjectIdentity, ObjectType
+except ImportError:
+    # Fallback/Debug if structure is different, but strict 7.x requires this
+    import logging
+    logging.error("Failed to import pysnmp.hlapi.v3arch.sync. Ensure pysnmp 7.x is installed.")
+    raise
+
 from core.utils import ensure_directory_exists
 
 class SNMPManager:
