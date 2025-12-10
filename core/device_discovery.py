@@ -7,25 +7,25 @@ class DeviceDiscovery:
         self.snmp_manager = SNMPManager(version, community, user, auth_key, priv_key, auth_protocol, priv_protocol)
         self.device_data = {}
 
-    def discover(self):
+    async def discover(self):
         """
         Orchestrate the discovery process.
         """
         # 1. Validate Reachability
-        if not self.snmp_manager.validate_snmp_reachability(self.ip):
+        if not await self.snmp_manager.validate_snmp_reachability(self.ip):
             return {"error": f"Device {self.ip} is not reachable via SNMP or credentials are wrong."}
 
         # 2. Basic System Info
-        system_info = self.snmp_manager.get_system_info(self.ip)
+        system_info = await self.snmp_manager.get_system_info(self.ip)
         
         # 3. Determine Device Type
         device_type = self._classify_device(system_info)
         
         # 4. Fetch Interfaces/Ports
-        interfaces = self.snmp_manager.get_full_interface_details(self.ip)
+        interfaces = await self.snmp_manager.get_full_interface_details(self.ip)
         
         # 5. Fetch Neighbors (Generic)
-        neighbors_raw = self.snmp_manager.get_snmp_neighbors(self.ip)
+        neighbors_raw = await self.snmp_manager.get_snmp_neighbors(self.ip)
         neighbors_formatted = self._format_neighbors(neighbors_raw)
 
         # 6. Construct Final JSON

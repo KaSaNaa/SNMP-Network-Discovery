@@ -1,18 +1,17 @@
 import logging, json
-# pysnmp 7.x maintains backward compatibility with traditional hlapi imports
-from pysnmp.hlapi import (
-    CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, 
-    ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
+import asyncio
+
+# pysnmp 7.x uses v3arch.asyncio for async SNMP operations (supports v1/v2c/v3)
+from pysnmp.hlapi.v3arch.asyncio import (
+    CommunityData, UsmUserData, SnmpEngine, ContextData,
+    ObjectType, ObjectIdentity, 
+    get_cmd, next_cmd, bulk_cmd, walk_cmd,
+    usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol,
+    usmDESPrivProtocol, usm3DESEDEPrivProtocol, 
+    usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
 )
-try:
-    from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
-    from pysnmp.hlapi import (
-        usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, 
-        usmAesCfb192Protocol, usmAesCfb256Protocol
-    )
-except ImportError:
-    # SNMPv3 protocols might not be needed for v2c
-    pass
+from pysnmp.hlapi.v3arch.asyncio.transport import UdpTransportTarget
+
 from core.utils import ensure_directory_exists
 
 class SNMPManager:
@@ -45,12 +44,16 @@ class SNMPManager:
         
         ensure_directory_exists(log_path)
 
+        # Configure logging to ONLY write to file, not console
         logging.basicConfig(
-            filename = log_path,  
-            level = logging.ERROR,
-            format = '%(asctime)s %(levelname)s: %(message)s',
-            datefmt = '%Y-%m-%d %H:%M:%S'
+            filename=log_path,  
+            level=logging.INFO,  # Changed to INFO to capture more details
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True  # Override any existing configuration
         )
+        # Disable propagation to console
+        logging.getLogger().handlers = [h for h in logging.getLogger().handlers if not isinstance(h, logging.StreamHandler) or h.stream.name != '<stderr>']
 
     def __validate_snmpv3_params(self):
         """
@@ -64,13 +67,36 @@ class SNMPManager:
         pass
 
 
-    def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
+    async def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
+        """
+        Perform SNMP discovery on a target device with timeout.
+        Args:
+            target (str): The IP address or hostname of the target device.
+            base_oid (str, optional): The base OID to start the discovery from. Defaults to '1.3.6.1.2.1.1'.
+            use_next_cmd (bool, optional): Whether to use the SNMP walk (True) or single get (False). Defaults to True.
+        Returns:
+            list: A list of tuples containing OID and value pairs discovered.
+        Raises:
+            ValueError: If required parameters for the specified SNMP version are missing or if an invalid SNMP version is specified.
+            asyncio.TimeoutError: If the operation takes longer than the timeout
+        """
+        try:
+            # Wrap the actual discovery with a timeout
+            return await asyncio.wait_for(
+                self._snmp_discovery_internal(target, base_oid, use_next_cmd),
+                timeout=60.0  # 60 second timeout for slower devices
+            )
+        except asyncio.TimeoutError:
+            logging.error(f'SNMP discovery timeout for {target} OID {base_oid}')
+            return []  # Return empty list on timeout
+    
+    async def _snmp_discovery_internal(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
         """
         Perform SNMP discovery on a target device.
         Args:
             target (str): The IP address or hostname of the target device.
             base_oid (str, optional): The base OID to start the discovery from. Defaults to '1.3.6.1.2.1.1'.
-            use_next_cmd (bool, optional): Whether to use the SNMP nextCmd (True) or getCmd (False). Defaults to True.
+            use_next_cmd (bool, optional): Whether to use the SNMP walk (True) or single get (False). Defaults to True.
         Returns:
             list: A list of tuples containing OID and value pairs discovered.
         Raises:
@@ -94,51 +120,76 @@ class SNMPManager:
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
     
-        cmd = nextCmd if use_next_cmd else getCmd
+        # Create transport target using async .create() method
+        transport = await UdpTransportTarget.create((target, 161))
     
-        for errorIndication, errorStatus, errorIndex, varBinds in cmd(
-            SnmpEngine(),
-            user_data,
-            UdpTransportTarget((target, 161)),
-            ContextData(),
-            ObjectType(ObjectIdentity(base_oid)),
-            lexicographicMode=False if use_next_cmd else True,
-        ):
+        if use_next_cmd:
+            # walk_cmd returns an AsyncGenerator - use async for
+            result_count = 0
+            max_results = 500  # Reduced limit for faster operation
+            async for errorIndication, errorStatus, errorIndex, varBinds in walk_cmd(
+                SnmpEngine(),
+                user_data,
+                transport,
+                ContextData(),
+                ObjectType(ObjectIdentity(base_oid)),
+            ):
+                result_count += 1
+                if result_count > max_results:
+                    logging.warning(f'Reached max results limit ({max_results}) for {base_oid}')
+                    break
+                    
+                if errorIndication or errorStatus:
+                    if errorIndication:
+                        logging.error(f'Error Indication: {errorIndication}')
+                    if errorStatus:
+                        logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
+                    continue
+                else:
+                    for varBind in varBinds:
+                        oid_str, value_str = varBind
+                        results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+        else:
+           # get_cmd is a coroutine that returns a single tuple - await it directly
+            errorIndication, errorStatus, errorIndex, varBinds = await get_cmd(
+                SnmpEngine(),
+                user_data,
+                transport,
+                ContextData(),
+                ObjectType(ObjectIdentity(base_oid)),
+            )
             if errorIndication or errorStatus:
-                # Log errors into a log file
                 if errorIndication:
-                    print(f"DEBUG: SNMP Error Indication: {errorIndication}")
                     logging.error(f'Error Indication: {errorIndication}')
                 if errorStatus:
-                    print(f"DEBUG: SNMP Error Status: {errorStatus.prettyPrint()}")
                     logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
-                continue
             else:
                 for varBind in varBinds:
                     oid_str, value_str = varBind
                     results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+        
         return results
 
-    def validate_snmp_reachability(self, target):
+    async def validate_snmp_reachability(self, target):
         """
         Check if the target is reachable via SNMP.
         """
         try:
             # Using sysDescr as validation
-            print(f"DEBUG: Validating SNMP reachability for {target} (v{self.version}, community={self.community})...")
-            sys_descr = self.snmp_discovery(target, "1.3.6.1.2.1.1.1.0", use_next_cmd=False)
+            logging.info(f'Validating SNMP reachability for {target} (v{self.version})')
+            sys_descr = await self.snmp_discovery(target, "1.3.6.1.2.1.1.1.0", use_next_cmd=False)
             if sys_descr:
-                print(f"DEBUG: SNMP validation successful. sysDescr: {sys_descr[0][1]}")
+                logging.info(f'SNMP validation successful for {target}')
                 return True
             else:
-                print("DEBUG: SNMP validation failed (No data returned).")
+                logging.error(f'SNMP validation failed for {target} (No data returned)')
                 return False
         except Exception as e:
-            print(f"DEBUG: SNMP validation exception: {e}")
+            logging.error(f'SNMP validation exception for {target}: {e}')
             logging.error(f"SNMP validation failed for {target}: {e}")
             return False
 
-    def get_system_info(self, target):
+    async def get_system_info(self, target):
         """
         Retrieve basic system information (Name, Description, ObjectID, Uptime, Contact, Location).
         """
@@ -154,7 +205,7 @@ class SNMPManager:
         }
         
         for key, oid in oids.items():
-            result = self.snmp_discovery(target, oid, use_next_cmd=False)
+            result = await self.snmp_discovery(target, oid, use_next_cmd=False)
             if result:
                 sys_info[key] = result[0][1]
             else:
@@ -162,6 +213,7 @@ class SNMPManager:
         
         return sys_info
 
+    async def get_snmp_neighbors(self, ip):
         """
         Retrieves SNMP neighbors for a given IP address using LLDP and CDP protocols.
 
@@ -173,21 +225,21 @@ class SNMPManager:
         """
         neighbors = []
 
-        def get_lldp_neighbors():
+        async def get_lldp_neighbors():
             lldp_oid = "1.0.8802.1.1.2.1.4"
-            return self.snmp_discovery(ip, lldp_oid)
+            return await self.snmp_discovery(ip, lldp_oid)
 
-        def get_cdp_neighbors():
+        async def get_cdp_neighbors():
             cdp_oid = ".1.3.6.1.4.1.9.9.23.1.2.1"
-            return self.snmp_discovery(ip, cdp_oid)
+            return await self.snmp_discovery(ip, cdp_oid)
 
-        neighbors.extend(get_lldp_neighbors())
-        neighbors.extend(get_cdp_neighbors())
+        neighbors.extend(await get_lldp_neighbors())
+        neighbors.extend(await get_cdp_neighbors())
 
         return neighbors
 
 
-    def get_local_ports(self, target):
+    async def get_local_ports(self, target):
         """
         Retrieves the local ports and their descriptions from the target device using SNMP.
 
@@ -225,13 +277,14 @@ class SNMPManager:
         else:
             raise ValueError("Invalid SNMP version. Must be 1, 2, or 3.")
 
-        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+        transport = await UdpTransportTarget.create((target, 161))
+
+        async for errorIndication, errorStatus, errorIndex, varBinds in walk_cmd(
             SnmpEngine(),
             user_data,
-            UdpTransportTarget((target, 161)),
+            transport,
             ContextData(),
             ObjectType(ObjectIdentity(if_descr_oid)),
-            lexicographicMode=False,
         ):
             if errorIndication:
                 print(f"Error: {errorIndication}")
@@ -255,7 +308,7 @@ class SNMPManager:
 
         return local_ports
 
-    def get_full_interface_details(self, target):
+    async def get_full_interface_details(self, target):
         """
         Retrieves detailed interface information including Name, Mac, Status.
         """
@@ -271,13 +324,15 @@ class SNMPManager:
         # We can walk .1.3.6.1.2.1.2.2.1 (ifTable entry)
         # But simpler to walk specific columns.
         
-        def get_column(oid):
-             res = self.snmp_discovery(target, oid, use_next_cmd=True)
+        async def get_column(oid):
+             logging.info(f'Walking SNMP OID: {oid} for {target}')
+             res = await self.snmp_discovery(target, oid, use_next_cmd=True)
+             logging.info(f'Retrieved {len(res)} results for OID {oid}')
              return {r[0].split('.')[-1]: r[1] for r in res}
 
-        names = get_column("1.3.6.1.2.1.2.2.1.2")
-        macs = get_column("1.3.6.1.2.1.2.2.1.6")
-        oper_status = get_column("1.3.6.1.2.1.2.2.1.8")
+        names = await get_column("1.3.6.1.2.1.2.2.1.2")
+        macs = await get_column("1.3.6.1.2.1.2.2.1.6")
+        oper_status = await get_column("1.3.6.1.2.1.2.2.1.8")
         
         # IP Addresses are in ipAddrTable usually mapped to ifIndex
         # ipAdEntAddr .1.3.6.1.2.1.4.20.1.1 (Use as key)
@@ -285,8 +340,8 @@ class SNMPManager:
         # ipAdEntNetMask .1.3.6.1.2.1.4.20.1.3
         
         ip_mapping = {}
-        ip_indices = self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.2", use_next_cmd=True)
-        ip_masks = self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.3", use_next_cmd=True)
+        ip_indices = await self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.2", use_next_cmd=True)
+        ip_masks = await self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.3", use_next_cmd=True)
         
         # Convert list to dict for lookup
         # OID for ipAdEntIfIndex is ...20.1.2.x.x.x.x so last 4 parts are IP
@@ -414,7 +469,7 @@ class SNMPManager:
     def __is_protocol_not_enabled(self, result):
         return result and result[0][1] == "No Such Instance currently exists at this OID"
 
-    def get_remote_interface(self, neighbor_ip, source_ip, local_port_oid):
+    async def get_remote_interface(self, neighbor_ip, source_ip, local_port_oid):
         """
         Retrieves the remote interface description using SNMP discovery via LLDP or CDP.
         This method attempts to discover the remote interface description by querying the
@@ -434,7 +489,7 @@ class SNMPManager:
         cdp_remote_oid = f".1.3.6.1.4.1.9.9.23.1.2.1.1.6.{local_port_oid}"
         
         # Try LLDP first
-        remote_interface_result = self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
+        remote_interface_result = await self.snmp_discovery(neighbor_ip, lldp_remote_oid, False)
         
         if self.__is_protocol_not_enabled(remote_interface_result):
             print("LLDP is not enabled on the interfaces of the target device!")
@@ -442,7 +497,7 @@ class SNMPManager:
         
         # Fallback to CDP if LLDP fails
         if not remote_interface_result:
-            remote_interface_result = self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
+            remote_interface_result = await self.snmp_discovery(neighbor_ip, cdp_remote_oid, False)
         
             if self.__is_protocol_not_enabled(remote_interface_result):
                 print("CDP is not enabled on the interfaces of the target device!")

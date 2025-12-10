@@ -1,9 +1,10 @@
 import argparse
 import json
 import sys
+import asyncio
 from core.device_discovery import DeviceDiscovery
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description="SNMP Discovery Script Enhancements")
     parser.add_argument("ip", help="Target IP address")
     parser.add_argument("--version", type=int, choices=[1, 2, 3], default=2, help="SNMP Version (1, 2, or 3)")
@@ -36,11 +37,11 @@ def main():
     )
 
     try:
-        result = discovery.discover()
+        result = await discovery.discover()
         print(json.dumps(result, indent=4))
     except Exception as e:
         print(json.dumps({"error": str(e)}, indent=4))
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
