@@ -94,8 +94,10 @@ class SNMPManager:
             if errorIndication or errorStatus:
                 # Log errors into a log file
                 if errorIndication:
+                    print(f"DEBUG: SNMP Error Indication: {errorIndication}")
                     logging.error(f'Error Indication: {errorIndication}')
                 if errorStatus:
+                    print(f"DEBUG: SNMP Error Status: {errorStatus.prettyPrint()}")
                     logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
                 continue
             else:
@@ -109,9 +111,17 @@ class SNMPManager:
         Check if the target is reachable via SNMP.
         """
         try:
+            # Using sysDescr as validation
+            print(f"DEBUG: Validating SNMP reachability for {target} (v{self.version}, community={self.community})...")
             sys_descr = self.snmp_discovery(target, "1.3.6.1.2.1.1.1.0", use_next_cmd=False)
-            return True if sys_descr else False
+            if sys_descr:
+                print(f"DEBUG: SNMP validation successful. sysDescr: {sys_descr[0][1]}")
+                return True
+            else:
+                print("DEBUG: SNMP validation failed (No data returned).")
+                return False
         except Exception as e:
+            print(f"DEBUG: SNMP validation exception: {e}")
             logging.error(f"SNMP validation failed for {target}: {e}")
             return False
 
