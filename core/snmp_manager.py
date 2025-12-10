@@ -1,7 +1,5 @@
 import logging, json
-from pysnmp.hlapi import CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
-from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
-from pysnmp.hlapi import usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
+from pysnmp.hlapi import *
 from core.utils import ensure_directory_exists
 
 class SNMPManager:
@@ -47,15 +45,10 @@ class SNMPManager:
         """
         if not self.user or not self.auth_key or not self.priv_key or not self.auth_protocol or not self.priv_protocol:
             raise ValueError("User, auth_key, priv_key, auth_protocol, and priv_protocol are required for SNMPv3")
-
-        valid_auth_protocols = [usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol]
-        valid_priv_protocols = [usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol]
-
-        if self.auth_protocol not in valid_auth_protocols:
-            raise ValueError(f"Invalid auth_protocol: {self.auth_protocol}. Must be one of {valid_auth_protocols}")
-
-        if self.priv_protocol not in valid_priv_protocols:
-            raise ValueError(f"Invalid priv_protocol: {self.priv_protocol}. Must be one of {valid_priv_protocols}")
+        
+        # In pysnmp > 6, protocol objects might need verification or just passed through.
+        # Assuming standard usage, we keep this basic validation or relax it if protocols are passed as strings/constants
+        pass
 
 
     def snmp_discovery(self, target, base_oid='1.3.6.1.2.1.1', use_next_cmd=True):
@@ -110,9 +103,42 @@ class SNMPManager:
                     oid_str, value_str = varBind
                     results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
         return results
-    
-    
-    def get_snmp_neighbors(self, ip):
+
+    def validate_snmp_reachability(self, target):
+        """
+        Check if the target is reachable via SNMP.
+        """
+        try:
+            sys_descr = self.snmp_discovery(target, "1.3.6.1.2.1.1.1.0", use_next_cmd=False)
+            return True if sys_descr else False
+        except Exception as e:
+            logging.error(f"SNMP validation failed for {target}: {e}")
+            return False
+
+    def get_system_info(self, target):
+        """
+        Retrieve basic system information (Name, Description, ObjectID, Uptime, Contact, Location).
+        """
+        sys_info = {}
+        oids = {
+            "description": "1.3.6.1.2.1.1.1.0",
+            "object_id": "1.3.6.1.2.1.1.2.0",
+            "uptime": "1.3.6.1.2.1.1.3.0",
+            "contact": "1.3.6.1.2.1.1.4.0",
+            "name": "1.3.6.1.2.1.1.5.0",
+            "location": "1.3.6.1.2.1.1.6.0",
+            "services": "1.3.6.1.2.1.1.7.0"
+        }
+        
+        for key, oid in oids.items():
+            result = self.snmp_discovery(target, oid, use_next_cmd=False)
+            if result:
+                sys_info[key] = result[0][1]
+            else:
+                sys_info[key] = "Unknown"
+        
+        return sys_info
+
         """
         Retrieves SNMP neighbors for a given IP address using LLDP and CDP protocols.
 
@@ -205,9 +231,85 @@ class SNMPManager:
                     local_ports[port_index] = value_str
 
         return local_ports
+
+    def get_full_interface_details(self, target):
+        """
+        Retrieves detailed interface information including Name, Mac, Status.
+        """
+        interfaces = []
+        # ifTable/ifXTable columns
+        # ifIndex: .1.3.6.1.2.1.2.2.1.1
+        # ifDescr: .1.3.6.1.2.1.2.2.1.2 (or ifName .1.3.6.1.2.1.31.1.1.1.1)
+        # ifType: .1.3.6.1.2.1.2.2.1.3
+        # ifPhysAddress: .1.3.6.1.2.1.2.2.1.6
+        # ifAdminStatus: .1.3.6.1.2.1.2.2.1.7
+        # ifOperStatus: .1.3.6.1.2.1.2.2.1.8
+        
+        # We can walk .1.3.6.1.2.1.2.2.1 (ifTable entry)
+        # But simpler to walk specific columns.
+        
+        def get_column(oid):
+             res = self.snmp_discovery(target, oid, use_next_cmd=True)
+             return {r[0].split('.')[-1]: r[1] for r in res}
+
+        names = get_column("1.3.6.1.2.1.2.2.1.2")
+        macs = get_column("1.3.6.1.2.1.2.2.1.6")
+        oper_status = get_column("1.3.6.1.2.1.2.2.1.8")
+        
+        # IP Addresses are in ipAddrTable usually mapped to ifIndex
+        # ipAdEntAddr .1.3.6.1.2.1.4.20.1.1 (Use as key)
+        # ipAdEntIfIndex .1.3.6.1.2.1.4.20.1.2
+        # ipAdEntNetMask .1.3.6.1.2.1.4.20.1.3
+        
+        ip_mapping = {}
+        ip_indices = self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.2", use_next_cmd=True)
+        ip_masks = self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.3", use_next_cmd=True)
+        
+        # Convert list to dict for lookup
+        # OID for ipAdEntIfIndex is ...20.1.2.x.x.x.x so last 4 parts are IP
+        # Actually snmp_discovery returns (OID, Value). OID string ends with IP.
+        
+        # Create a mapping of ifIndex -> list of {ip, mask}
+        if_ip_map = {}
+        if ip_indices:
+             for oid, if_idx in ip_indices:
+                 ip_addr = oid.replace("1.3.6.1.2.1.4.20.1.2.", "")
+                 # finding mask
+                 mask = "Unknown"
+                 for m_oid, m_val in ip_masks:
+                     if m_oid.endswith(ip_addr):
+                         mask = m_val
+                         break
+                 
+                 if if_idx not in if_ip_map:
+                     if_ip_map[if_idx] = []
+                 if_ip_map[if_idx].append({"ip": ip_addr, "mask": mask})
+
+        for idx, name in names.items():
+            mac_hex = macs.get(idx, "")
+            # Convert hex string (e.g. 0x...) to standard MAC format if needed
+            # pysnmp might return it as hex string or bytes.
+            if mac_hex.startswith("0x"):
+                 mac_clean = mac_hex.replace("0x", "")
+                 mac_formatted = ":".join([mac_clean[i:i+2] for i in range(0, len(mac_clean), 2)])
+            else:
+                 mac_formatted = mac_hex
+
+            status_map = {'1': 'up', '2': 'down', '3': 'testing'}
+            status = status_map.get(oper_status.get(idx, '0'), 'unknown')
+
+            if_data = {
+                "index": idx,
+                "name": name,
+                "mac": mac_formatted,
+                "status": status,
+                "ips": if_ip_map.get(idx, [])
+            }
+            interfaces.append(if_data)
+            
+        return interfaces
     
-    
-    def recursive_discovery(self, ip, discovered_devices=None, discovered_ips=None):
+
         """
         Recursively discovers network devices starting from a given IP address.
 

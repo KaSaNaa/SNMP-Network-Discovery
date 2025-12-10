@@ -1,51 +1,38 @@
 import networkx as nx
 import matplotlib.pyplot as plt
+import json
 from .network_utils import NetworkUtils
 from .snmp_manager import SNMPManager
 from .database_manager import DatabaseManager
 from .screen_utils import ScreenUtils
 
 class GraphManager:
-    def __init__(self, version, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
+    def __init__(self, version=None, community=None, user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
         self.snmp_manager = SNMPManager(version, community, user, auth_key, priv_key, auth_protocol, priv_protocol)
         self.db_manager = DatabaseManager()
 
-    def build_topology(self, active_ips):
+    def build_topology(self, json_file_path):
         G = nx.Graph()
-        NetworkUtils.save_local_ip_to_env()
-        
-        for ip in active_ips:
-            dns_host_name = NetworkUtils.get_dns_hostname(ip)
-            print("DNS HOST NAME: " + dns_host_name)
-            remote_port_array = []
-            local_port_array = []
-            remote_device_array = []
-            local_ports = self.snmp_manager.get_local_ports(ip)
-            device_name = self.db_manager.get_host_name_by_address(ip)
-            G.add_node(device_name, label=device_name)
-            
-            if not device_name:
-                device_name = ip
-                
-            print(ip + " " + device_name)
-            neighbors = self.snmp_manager.get_snmp_neighbors(ip)
-            
-            for oid, value in neighbors:
-                local_device = device_name
-                if oid:
-                    if "0.8802.1.1.2.1.4.1.1.7" in oid:
-                        remote_port_array.append(value)
-                    if "0.8802.1.1.2.1.4.1.1.2" in oid:
-                        local_port = local_ports.get(value, "N/A")
-                        local_port_array.append(local_port)
-                    if "0.8802.1.1.2.1.4.1.1.9" in oid:
-                        r1 = value.split(".")[0]
-                        remote_device_array.append(r1)
-            i = 0
-            for d in remote_device_array:
-                G.add_node(d, label=d)
-                G.add_edge(device_name, d, label=remote_port_array[i])
-                i = i + 1
+        # NetworkUtils.save_local_ip_to_env()
+
+        with open(json_file_path, 'r') as json_file:
+            discovered_devices = json.load(json_file)
+
+        for device in discovered_devices:
+            for ip, details in device.items():
+                device_name = details["hostname"]
+                G.add_node(device_name, label=device_name)
+                print(f"Adding device: {ip} ({device_name})")
+
+                for neighbor_ip, neighbor_details in details["neighbors"].items():
+                    neighbor_name = neighbor_details["details"]["hostname"]
+                    local_interface = neighbor_details["local_interface"]
+                    remote_interface = neighbor_details["remote_interface"]
+
+                    G.add_node(neighbor_name, label=neighbor_name)
+                    G.add_edge(device_name, neighbor_name, label=f"{local_interface} -> {remote_interface}")
+                    print(f"Adding edge: {device_name} ({local_interface}) -> {neighbor_name} ({remote_interface})")
+
         return G
 
     def draw_topology(self, graph):
