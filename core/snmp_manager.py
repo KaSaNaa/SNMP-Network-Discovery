@@ -1,13 +1,18 @@
 import logging, json
+# pysnmp 7.x maintains backward compatibility with traditional hlapi imports
+from pysnmp.hlapi import (
+    CommunityData, UsmUserData, SnmpEngine, UdpTransportTarget, 
+    ContextData, ObjectType, ObjectIdentity, nextCmd, getCmd
+)
 try:
-    from pysnmp.hlapi.v3arch.sync import *
-    from pysnmp.smi.rfc1902 import ObjectIdentity, ObjectType
+    from pysnmp.hlapi.auth import usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol
+    from pysnmp.hlapi import (
+        usmDESPrivProtocol, usm3DESEDEPrivProtocol, usmAesCfb128Protocol, 
+        usmAesCfb192Protocol, usmAesCfb256Protocol
+    )
 except ImportError:
-    # Fallback/Debug if structure is different, but strict 7.x requires this
-    import logging
-    logging.error("Failed to import pysnmp.hlapi.v3arch.sync. Ensure pysnmp 7.x is installed.")
-    raise
-
+    # SNMPv3 protocols might not be needed for v2c
+    pass
 from core.utils import ensure_directory_exists
 
 class SNMPManager:

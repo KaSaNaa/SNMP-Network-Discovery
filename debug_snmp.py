@@ -1,5 +1,7 @@
-from pysnmp.hlapi.v3arch.sync import *
-from pysnmp.smi.rfc1902 import ObjectIdentity, ObjectType
+from pysnmp.hlapi import (
+    CommunityData, SnmpEngine, UdpTransportTarget, 
+    ContextData, ObjectType, ObjectIdentity, getCmd
+)
 import logging
 
 # Configure logging to stdout
