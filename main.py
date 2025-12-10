@@ -17,13 +17,59 @@ async def main():
 
     args = parser.parse_args()
 
-    # Map string protocols to pysnmp objects if necessary, currently passing strings/None
-    # The SNMPManager might need logic to map string 'SHA' to specific constant if 7.x differs.
-    # For now assuming SNMPManager handles basic string-to-protocol or expects correct constants.
-    # Note: The updated code in SNMPManager removed strict validation against constants, so it might fail if raw strings are passed where objects are expected.
-    # However, pysnmp usually requires specific object instances (usmHMACSHAAuthProtocol etc).
-    # Since I cannot import them easily here without dependency, I will rely on SNMPManager to have default handling or user to provide valid inputs.
-    # Actually, let's just pass strings and let pysnmp complain if wrong, or we should map them in SNMPManager.
+    # Map SNMPv3 protocol strings to pysnmp protocol objects
+    auth_protocol = None
+    priv_protocol = None
+    
+    if args.version == 3:
+        # Import SNMPv3 protocol objects (pysnmp 7.x naming)
+        from pysnmp.hlapi.v3arch.asyncio import (
+            USM_AUTH_HMAC96_MD5, USM_AUTH_HMAC96_SHA,
+            USM_AUTH_HMAC128_SHA224, USM_AUTH_HMAC192_SHA256,
+            USM_AUTH_HMAC256_SHA384, USM_AUTH_HMAC384_SHA512,
+            USM_AUTH_NONE,
+            USM_PRIV_CBC56_DES, USM_PRIV_CBC168_3DES,
+            USM_PRIV_CFB128_AES, USM_PRIV_CFB192_AES, USM_PRIV_CFB256_AES,
+            USM_PRIV_CFB192_AES_BLUMENTHAL, USM_PRIV_CFB256_AES_BLUMENTHAL,
+            USM_PRIV_NONE
+        )
+        
+        # Map authentication protocols (pysnmp 7.x uses USM_AUTH_* constants)
+        auth_map = {
+            'MD5': USM_AUTH_HMAC96_MD5,
+            'SHA': USM_AUTH_HMAC96_SHA,
+            'SHA1': USM_AUTH_HMAC96_SHA,
+            'SHA224': USM_AUTH_HMAC128_SHA224,
+            'SHA256': USM_AUTH_HMAC192_SHA256,
+            'SHA384': USM_AUTH_HMAC256_SHA384,
+            'SHA512': USM_AUTH_HMAC384_SHA512,
+            'NONE': USM_AUTH_NONE,
+        }
+        
+        # Map privacy protocols (pysnmp 7.x uses USM_PRIV_* constants)
+        priv_map = {
+            'DES': USM_PRIV_CBC56_DES,
+            '3DES': USM_PRIV_CBC168_3DES,
+            'AES': USM_PRIV_CFB128_AES,
+            'AES128': USM_PRIV_CFB128_AES,
+            'AES192': USM_PRIV_CFB192_AES,
+            'AES256': USM_PRIV_CFB256_AES,
+            'AES192BLUMENTHAL': USM_PRIV_CFB192_AES_BLUMENTHAL,
+            'AES256BLUMENTHAL': USM_PRIV_CFB256_AES_BLUMENTHAL,
+            'NONE': USM_PRIV_NONE,
+        }
+        
+        if args.auth_proto:
+            auth_protocol = auth_map.get(args.auth_proto.upper())
+            if not auth_protocol:
+                print(json.dumps({"error": f"Invalid auth protocol: {args.auth_proto}. Valid options: {', '.join(auth_map.keys())}"}, indent=4))
+                sys.exit(1)
+        
+        if args.priv_proto:
+            priv_protocol = priv_map.get(args.priv_proto.upper())
+            if not priv_protocol:
+                print(json.dumps({"error": f"Invalid privacy protocol: {args.priv_proto}. Valid options: {', '.join(priv_map.keys())}"}, indent=4))
+                sys.exit(1)
     
     discovery = DeviceDiscovery(
         ip=args.ip,
@@ -32,8 +78,8 @@ async def main():
         user=args.user,
         auth_key=args.auth_key,
         priv_key=args.priv_key,
-        auth_protocol=args.auth_proto,
-        priv_protocol=args.priv_proto
+        auth_protocol=auth_protocol,  # Pass the mapped object
+        priv_protocol=priv_protocol   # Pass the mapped object
     )
 
     try:

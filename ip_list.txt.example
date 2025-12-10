@@ -1,0 +1,21 @@
+# Example IP addresses for testing
+# Lines starting with # are comments and will be ignored
+
+# Core network devices
+192.168.1.1
+192.168.1.254
+
+# Distribution switches
+192.168.10.1
+192.168.10.2
+192.168.10.3
+
+# Access switches
+192.168.20.1
+192.168.20.2
+
+# Firewalls
+10.0.0.1
+10.0.0.2
+
+# Add your IP addresses below:

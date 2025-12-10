@@ -351,13 +351,25 @@ class SNMPManager:
         if_ip_map = {}
         if ip_indices:
              for oid, if_idx in ip_indices:
-                 ip_addr = oid.replace("1.3.6.1.2.1.4.20.1.2.", "")
-                 # finding mask
+                 # The IP address is encoded in the last 4 parts of the OID
+                 # Example OID: 1.3.6.1.2.1.4.20.1.2.192.168.1.1
+                 # IP is: 192.168.1.1
+                 oid_parts = oid.split('.')
+                 if len(oid_parts) >= 4:
+                     # Extract last 4 parts as IP address
+                     ip_addr = '.'.join(oid_parts[-4:])
+                 else:
+                     ip_addr = oid  # Fallback
+                 
+                 # Find corresponding mask
                  mask = "Unknown"
                  for m_oid, m_val in ip_masks:
-                     if m_oid.endswith(ip_addr):
-                         mask = m_val
-                         break
+                     m_oid_parts = m_oid.split('.')
+                     if len(m_oid_parts) >= 4:
+                         m_ip = '.'.join(m_oid_parts[-4:])
+                         if m_ip == ip_addr:
+                             mask = m_val
+                             break
                  
                  if if_idx not in if_ip_map:
                      if_ip_map[if_idx] = []

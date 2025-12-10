@@ -11,6 +11,7 @@ dist/
 # Ignore other files and directories
 *.log
 .vscode/
+logs/
 build/
 *.tmp
 network_discovery/network_discovery.py
@@ -20,3 +21,4 @@ exec.spec
 decoded_neighbors.json
 snmp_discovery.json
 data/discovered_devices.json
+discovery_results/
