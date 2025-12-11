@@ -524,11 +524,13 @@ class DeviceDiscovery:
                         suffix = oid.split("9.9.23.1.2.1.1.")[1] if "9.9.23.1.2.1.1." in oid else ""
                     
                     parts = suffix.split(".")
-                    if len(parts) >= 2:
+                    if len(parts) >= 3:
                         column_type = parts[0]
                         local_if_index = parts[1]
+                        device_index = parts[2]  # CDP supports multiple neighbors per interface
                         
-                        key = f"cdp_{local_if_index}"
+                        # Key must include both ifIndex and deviceIndex for multiple neighbors
+                        key = f"cdp_{local_if_index}_{device_index}"
                         if key not in neighbor_data:
                             neighbor_data[key] = {
                                 "protocol": "CDP",
@@ -553,63 +555,90 @@ class DeviceDiscovery:
         lldp_count = sum(1 for k in neighbor_data.keys() if k.startswith('lldp_'))
         logging.info(f"Neighbor discovery: Found {cdp_count} CDP entries, {lldp_count} LLDP entries")
         
-        # Merge CDP and LLDP data for the same interface
-        # Build a mapping by local interface index
-        merged_by_interface = {}
+        # Separate CDP and LLDP neighbors
+        # CDP can have multiple neighbors per interface (keyed by ifIndex_deviceIndex)
+        # LLDP is keyed by local_if_index
+        cdp_neighbors = {}
+        lldp_neighbors = {}
         
         for key, data in neighbor_data.items():
             local_if_index = data.get("local_interface", "Unknown")
             protocol = data.get("protocol", "Unknown")
-            
-            if local_if_index not in merged_by_interface:
-                merged_by_interface[local_if_index] = {"cdp": None, "lldp": None}
+            neighbor_name = data.get("neighbor_name", "Unknown")
             
             if protocol == "CDP":
-                merged_by_interface[local_if_index]["cdp"] = data
+                # Use full key (includes device index) to keep all CDP neighbors
+                cdp_neighbors[key] = data
             elif protocol == "LLDP":
-                merged_by_interface[local_if_index]["lldp"] = data
+                lldp_neighbors[key] = data
         
-        # Convert merged data to formatted list
-        # Prefer CDP over LLDP when both exist for the same interface
-        for local_if_index, protocols in merged_by_interface.items():
-            cdp_data = protocols.get("cdp")
-            lldp_data = protocols.get("lldp")
+        # Build final neighbor list
+        # For each CDP neighbor, check if there's a matching LLDP neighbor on same interface
+        # If so, use CDP data (preferred) and skip the LLDP duplicate
+        used_lldp_keys = set()
+        
+        for cdp_key, cdp_data in cdp_neighbors.items():
+            local_if_index = cdp_data.get("local_interface", "Unknown")
+            cdp_neighbor_name = cdp_data.get("neighbor_name", "").lower()
             
-            # Prefer CDP if available, otherwise use LLDP
-            if cdp_data:
-                data = cdp_data
-                # If LLDP has additional info that CDP doesn't, merge it
-                if lldp_data:
-                    if not data.get("neighbor_name") and lldp_data.get("neighbor_name"):
-                        data["neighbor_name"] = lldp_data["neighbor_name"]
-                    if not data.get("remote_port") and lldp_data.get("remote_port"):
-                        data["remote_port"] = lldp_data.get("remote_port")
-            elif lldp_data:
-                data = lldp_data
-            else:
-                continue
+            # Check if LLDP has the same neighbor on same interface
+            for lldp_key, lldp_data in lldp_neighbors.items():
+                if lldp_data.get("local_interface") == local_if_index:
+                    lldp_neighbor_name = lldp_data.get("neighbor_name", "").lower()
+                    # If same neighbor name (or similar), mark LLDP as used
+                    if cdp_neighbor_name and lldp_neighbor_name:
+                        if cdp_neighbor_name == lldp_neighbor_name or \
+                           cdp_neighbor_name in lldp_neighbor_name or \
+                           lldp_neighbor_name in cdp_neighbor_name:
+                            used_lldp_keys.add(lldp_key)
+                            # Merge any additional LLDP data into CDP
+                            if not cdp_data.get("neighbor_name") and lldp_data.get("neighbor_name"):
+                                cdp_data["neighbor_name"] = lldp_data["neighbor_name"]
             
-            neighbor_name = data.get("neighbor_name", "Unknown")
-            neighbor_ip = data.get("neighbor_ip", "")
-            remote_port = data.get("remote_port", data.get("remote_port_desc", ""))
-            protocol = data.get("protocol", "Unknown")
+            # Add CDP neighbor to formatted list
+            neighbor_name = cdp_data.get("neighbor_name", "Unknown")
+            neighbor_ip = cdp_data.get("neighbor_ip", "")
+            remote_port = cdp_data.get("remote_port", cdp_data.get("remote_port_desc", ""))
+            protocol = cdp_data.get("protocol", "Unknown")
             
-            # Resolve local interface name from index using our mapping
             local_if_name = self._if_index_to_name.get(local_if_index, 
                             self._if_index_to_name.get(str(local_if_index), f"Interface {local_if_index}"))
             
-            # Build destination - prefer IP if available, otherwise use port/chassis info
-            destination = neighbor_ip if neighbor_ip else data.get("chassis_id", "")
+            formatted.append({
+                "Neighbor Name": neighbor_name,
+                "Neighbor ID": neighbor_name,
+                "Remote Port": remote_port if remote_port else "Unknown",
+                "Destination IP": neighbor_ip if neighbor_ip else "N/A",
+                "Origin Interface": local_if_name,
+                "Local Interface Index": local_if_index,
+                "Protocol": protocol,
+                "Platform": cdp_data.get("platform", ""),
+                "Details": f"Discovered via {protocol}"
+            })
+        
+        # Add remaining LLDP neighbors (not matched to CDP)
+        for lldp_key, lldp_data in lldp_neighbors.items():
+            if lldp_key in used_lldp_keys:
+                continue
+                
+            local_if_index = lldp_data.get("local_interface", "Unknown")
+            neighbor_name = lldp_data.get("neighbor_name", "Unknown")
+            neighbor_ip = lldp_data.get("neighbor_ip", "")
+            remote_port = lldp_data.get("remote_port", lldp_data.get("remote_port_desc", ""))
+            protocol = lldp_data.get("protocol", "Unknown")
+            
+            local_if_name = self._if_index_to_name.get(local_if_index, 
+                            self._if_index_to_name.get(str(local_if_index), f"Interface {local_if_index}"))
             
             formatted.append({
                 "Neighbor Name": neighbor_name,
-                "Neighbor ID": neighbor_name,  # CDP/LLDP device ID
+                "Neighbor ID": neighbor_name,
                 "Remote Port": remote_port if remote_port else "Unknown",
                 "Destination IP": neighbor_ip if neighbor_ip else "N/A",
-                "Origin Interface": local_if_name,  # Human-readable interface name
+                "Origin Interface": local_if_name,
                 "Local Interface Index": local_if_index,
                 "Protocol": protocol,
-                "Platform": data.get("platform", ""),
+                "Platform": lldp_data.get("platform", ""),
                 "Details": f"Discovered via {protocol}"
             })
         
