@@ -238,6 +238,92 @@ class SNMPManager:
         
         return sys_info
 
+    async def get_entity_info(self, target):
+        """
+        Retrieves entity (chassis) information including serial number and model.
+        Uses ENTITY-MIB (entPhysicalTable).
+        
+        OIDs:
+        - entPhysicalDescr: 1.3.6.1.2.1.47.1.1.1.1.2 (Description)
+        - entPhysicalClass: 1.3.6.1.2.1.47.1.1.1.1.5 (Class: 3=chassis)
+        - entPhysicalName: 1.3.6.1.2.1.47.1.1.1.1.7 (Name)
+        - entPhysicalSerialNum: 1.3.6.1.2.1.47.1.1.1.1.11 (Serial Number)
+        - entPhysicalModelName: 1.3.6.1.2.1.47.1.1.1.1.13 (Model Name)
+        """
+        entity_info = {
+            "serial_number": "Unknown",
+            "model": "Unknown",
+            "chassis_description": ""
+        }
+        
+        try:
+            # Get physical class to find the chassis entry (class=3)
+            phys_class = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.5", use_next_cmd=True)
+            phys_serial = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.11", use_next_cmd=True)
+            phys_model = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.13", use_next_cmd=True)
+            phys_descr = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.2", use_next_cmd=True)
+            
+            # Build lookup dictionaries by index
+            def build_dict(data):
+                result = {}
+                for oid, value in data:
+                    idx = oid.split('.')[-1]
+                    result[idx] = value
+                return result
+            
+            class_dict = build_dict(phys_class)
+            serial_dict = build_dict(phys_serial)
+            model_dict = build_dict(phys_model)
+            descr_dict = build_dict(phys_descr)
+            
+            # Find chassis entries (class=3) or stack entries (class=5)
+            # Priority: chassis (3) > stack (5) > module (9)
+            chassis_idx = None
+            for idx, cls in class_dict.items():
+                if cls == '3':  # Chassis
+                    chassis_idx = idx
+                    break
+                elif cls == '5' and not chassis_idx:  # Container/Stack
+                    chassis_idx = idx
+                elif cls == '9' and not chassis_idx:  # Module
+                    chassis_idx = idx
+            
+            # If no chassis found, try the first entry with a serial number
+            if not chassis_idx:
+                for idx, serial in serial_dict.items():
+                    if serial and serial != "" and serial != "Unknown":
+                        chassis_idx = idx
+                        break
+            
+            if chassis_idx:
+                serial = serial_dict.get(chassis_idx, "")
+                model = model_dict.get(chassis_idx, "")
+                descr = descr_dict.get(chassis_idx, "")
+                
+                # Decode hex strings
+                from core.utils import decode_hex_string
+                entity_info["serial_number"] = decode_hex_string(serial) if serial else "Unknown"
+                entity_info["model"] = decode_hex_string(model) if model else "Unknown"
+                entity_info["chassis_description"] = decode_hex_string(descr) if descr else ""
+            
+            # If model is still unknown, try to find any non-empty model
+            if entity_info["model"] == "Unknown" or not entity_info["model"]:
+                for idx, model in model_dict.items():
+                    if model and model != "" and not model.startswith("0x"):
+                        entity_info["model"] = model
+                        break
+                    elif model and model.startswith("0x"):
+                        from core.utils import decode_hex_string
+                        decoded = decode_hex_string(model)
+                        if decoded and decoded != model:
+                            entity_info["model"] = decoded
+                            break
+                            
+        except Exception as e:
+            logging.error(f"Error getting entity info for {target}: {e}")
+        
+        return entity_info
+
     async def get_snmp_neighbors(self, ip):
         """
         Retrieves SNMP neighbors for a given IP address using LLDP and CDP protocols.
@@ -336,18 +422,18 @@ class SNMPManager:
     async def get_full_interface_details(self, target):
         """
         Retrieves detailed interface information including Name, Mac, Status.
+        Uses ifXTable (ifName) for better interface names on modern devices.
         """
         interfaces = []
         # ifTable/ifXTable columns
         # ifIndex: .1.3.6.1.2.1.2.2.1.1
-        # ifDescr: .1.3.6.1.2.1.2.2.1.2 (or ifName .1.3.6.1.2.1.31.1.1.1.1)
+        # ifDescr: .1.3.6.1.2.1.2.2.1.2 (basic name)
+        # ifName: .1.3.6.1.2.1.31.1.1.1.1 (better name from ifXTable)
         # ifType: .1.3.6.1.2.1.2.2.1.3
         # ifPhysAddress: .1.3.6.1.2.1.2.2.1.6
         # ifAdminStatus: .1.3.6.1.2.1.2.2.1.7
         # ifOperStatus: .1.3.6.1.2.1.2.2.1.8
-        
-        # We can walk .1.3.6.1.2.1.2.2.1 (ifTable entry)
-        # But simpler to walk specific columns.
+        # ifAlias: .1.3.6.1.2.1.31.1.1.1.18 (interface description/alias)
         
         async def get_column(oid):
              logging.info(f'Walking SNMP OID: {oid} for {target}')
@@ -355,9 +441,37 @@ class SNMPManager:
              logging.info(f'Retrieved {len(res)} results for OID {oid}')
              return {r[0].split('.')[-1]: r[1] for r in res}
 
-        names = await get_column("1.3.6.1.2.1.2.2.1.2")
+        # Try ifName first (from ifXTable) - gives better names like "GigabitEthernet1/0/1"
+        if_names = await get_column("1.3.6.1.2.1.31.1.1.1.1")
+        
+        # Fallback to ifDescr if ifName is not available
+        if_descr = await get_column("1.3.6.1.2.1.2.2.1.2")
+        
+        # Merge: prefer ifName, fallback to ifDescr
+        names = {}
+        all_indices = set(if_names.keys()) | set(if_descr.keys())
+        for idx in all_indices:
+            # Prefer ifName if available and not empty/hex
+            if_name_val = if_names.get(idx, "")
+            if_descr_val = if_descr.get(idx, "")
+            
+            # Use ifName if it looks valid (not hex, not empty)
+            if if_name_val and not if_name_val.startswith("0x"):
+                names[idx] = if_name_val
+            elif if_descr_val and not if_descr_val.startswith("0x"):
+                names[idx] = if_descr_val
+            else:
+                # Both are hex or empty, try to decode
+                from core.utils import decode_hex_string
+                decoded_name = decode_hex_string(if_name_val) if if_name_val else ""
+                decoded_descr = decode_hex_string(if_descr_val) if if_descr_val else ""
+                names[idx] = decoded_name or decoded_descr or f"Interface_{idx}"
+        
         macs = await get_column("1.3.6.1.2.1.2.2.1.6")
         oper_status = await get_column("1.3.6.1.2.1.2.2.1.8")
+        
+        # Get interface aliases/descriptions
+        if_alias = await get_column("1.3.6.1.2.1.31.1.1.1.18")
         
         # IP Addresses are in ipAddrTable usually mapped to ifIndex
         # ipAdEntAddr .1.3.6.1.2.1.4.20.1.1 (Use as key)
@@ -368,23 +482,17 @@ class SNMPManager:
         ip_indices = await self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.2", use_next_cmd=True)
         ip_masks = await self.snmp_discovery(target, "1.3.6.1.2.1.4.20.1.3", use_next_cmd=True)
         
-        # Convert list to dict for lookup
-        # OID for ipAdEntIfIndex is ...20.1.2.x.x.x.x so last 4 parts are IP
-        # Actually snmp_discovery returns (OID, Value). OID string ends with IP.
-        
         # Create a mapping of ifIndex -> list of {ip, mask}
         if_ip_map = {}
         if ip_indices:
              for oid, if_idx in ip_indices:
                  # The IP address is encoded in the last 4 parts of the OID
                  # Example OID: 1.3.6.1.2.1.4.20.1.2.192.168.1.1
-                 # IP is: 192.168.1.1
                  oid_parts = oid.split('.')
                  if len(oid_parts) >= 4:
-                     # Extract last 4 parts as IP address
                      ip_addr = '.'.join(oid_parts[-4:])
                  else:
-                     ip_addr = oid  # Fallback
+                     ip_addr = oid
                  
                  # Find corresponding mask
                  mask = "Unknown"
@@ -402,20 +510,29 @@ class SNMPManager:
 
         for idx, name in names.items():
             mac_hex = macs.get(idx, "")
-            # Convert hex string (e.g. 0x...) to standard MAC format if needed
-            # pysnmp might return it as hex string or bytes.
+            # Convert hex string (e.g. 0x...) to standard MAC format
             if mac_hex.startswith("0x"):
                  mac_clean = mac_hex.replace("0x", "")
+                 # Ensure even length
+                 if len(mac_clean) % 2 == 1:
+                     mac_clean = '0' + mac_clean
                  mac_formatted = ":".join([mac_clean[i:i+2] for i in range(0, len(mac_clean), 2)])
             else:
                  mac_formatted = mac_hex
 
             status_map = {'1': 'up', '2': 'down', '3': 'testing'}
             status = status_map.get(oper_status.get(idx, '0'), 'unknown')
+            
+            # Get alias/description
+            alias = if_alias.get(idx, "")
+            if alias and alias.startswith("0x"):
+                from core.utils import decode_hex_string
+                alias = decode_hex_string(alias)
 
             if_data = {
                 "index": idx,
                 "name": name,
+                "description": alias if alias else "",
                 "mac": mac_formatted,
                 "status": status,
                 "ips": if_ip_map.get(idx, [])

@@ -6,6 +6,8 @@ class DeviceDiscovery:
         self.ip = ip
         self.snmp_manager = SNMPManager(version, community, user, auth_key, priv_key, auth_protocol, priv_protocol)
         self.device_data = {}
+        # Build interface index to name mapping for neighbor resolution
+        self._if_index_to_name = {}
 
     async def discover(self):
         """
@@ -18,21 +20,36 @@ class DeviceDiscovery:
         # 2. Basic System Info
         system_info = await self.snmp_manager.get_system_info(self.ip)
         
-        # 3. Fetch Interfaces/Ports
+        # 3. Get Entity Info (Serial Number, Model) from ENTITY-MIB
+        entity_info = await self.snmp_manager.get_entity_info(self.ip)
+        
+        # 4. Fetch Interfaces/Ports
         interfaces = await self.snmp_manager.get_full_interface_details(self.ip)
         
-        # 4. Determine Device Type using intelligent classification
+        # Build interface index to name mapping for neighbor resolution
+        self._if_index_to_name = {iface.get("index"): iface.get("name", f"Interface_{iface.get('index')}") 
+                                  for iface in interfaces}
+        
+        # 5. Determine Device Type using intelligent classification
         from core.utils import classify_device_type
         device_type, confidence, indicators = classify_device_type(system_info, interfaces)
         
-        # 5. Extract device type description from sysDescr (keep as additional info)
+        # 6. Extract device type description from sysDescr (keep as additional info)
         device_type_description = self._extract_device_type_from_description(system_info.get("description", ""))
         
-        # 6. Fetch Neighbors (Generic)
+        # 7. Fetch Neighbors (Generic)
         neighbors_raw = await self.snmp_manager.get_snmp_neighbors(self.ip)
         neighbors_formatted = self._format_neighbors(neighbors_raw)
 
-        # 7. Construct Final JSON
+        # 8. Determine Model - prefer ENTITY-MIB, fallback to sysDescr parsing
+        model = entity_info.get("model", "Unknown")
+        if model == "Unknown" or not model:
+            model = self._extract_model(system_info.get("description", ""), system_info.get("object_id", ""))
+        
+        # 9. Get Serial Number from ENTITY-MIB
+        serial_number = entity_info.get("serial_number", "Unknown")
+
+        # 10. Construct Final JSON
         self.device_data = {
             "Device Name": system_info.get("name", "Unknown"),
             "Device Type": device_type,
@@ -41,11 +58,11 @@ class DeviceDiscovery:
             "Device Type Description": device_type_description,
             "IP Address": self.ip,
             "Manufacturer": self._guess_manufacturer(system_info.get("description", ""), system_info.get("object_id", "")),
-            "Model Number": self._extract_model(system_info.get("description", "")),
+            "Model Number": model,
             "System OID": system_info.get("object_id", "Unknown"),
             "Description": system_info.get("description", "Unknown"),
-            "Serial Number": "Unknown", # Requires EntPhysicalTable or vendor specific OID
-            "Details": {} # Type specific
+            "Serial Number": serial_number,
+            "Details": {}
         }
         
         # Add Type specific details
@@ -186,10 +203,109 @@ class DeviceDiscovery:
         else:
             return "Unknown"
 
-    def _extract_model(self, description):
-        # Very rough extraction, usually model is first or second word after manufacturer
-        # Or parse standard strings
-        return "Unknown (Parsed from sysDescr)"
+    def _extract_model(self, description, object_id=None):
+        """
+        Extract model information from sysDescr and/or sysObjectID.
+        Uses known OID-to-model mappings and description parsing.
+        """
+        # Known sysObjectID to model mappings for Cisco devices
+        cisco_oid_models = {
+            "1.3.6.1.4.1.9.1.516": "Catalyst 3750",
+            "1.3.6.1.4.1.9.1.696": "Catalyst 3750-E",
+            "1.3.6.1.4.1.9.1.1208": "Catalyst 2960",
+            "1.3.6.1.4.1.9.1.695": "Catalyst 2960",
+            "1.3.6.1.4.1.9.1.950": "Catalyst 2960-S",
+            "1.3.6.1.4.1.9.1.1016": "Catalyst 3560",
+            "1.3.6.1.4.1.9.1.559": "Catalyst 3550",
+            "1.3.6.1.4.1.9.1.366": "Catalyst 2950",
+            "1.3.6.1.4.1.9.1.1745": "Catalyst 3850",
+            "1.3.6.1.4.1.9.1.2494": "Catalyst 9200",
+            "1.3.6.1.4.1.9.1.2495": "Catalyst 9300",
+            "1.3.6.1.4.1.9.1.1227": "Nexus",
+            "1.3.6.1.4.1.9.1.122": "2600 Series Router",
+            "1.3.6.1.4.1.9.1.208": "3600 Series Router",
+            "1.3.6.1.4.1.9.1.283": "7200 Series Router",
+            "1.3.6.1.4.1.9.1.620": "ISR Router",
+            "1.3.6.1.4.1.9.1.1045": "CSR 1000V",
+            "1.3.6.1.4.1.9.1.896": "ISR G2 Router",
+            "1.3.6.1.4.1.9.1.417": "ASA 5500",
+            "1.3.6.1.4.1.9.1.745": "ASA 5500",
+            "1.3.6.1.4.1.9.1.670": "FWSM",
+            "1.3.6.1.4.1.9.1.669": "PIX Firewall",
+            "1.3.6.1.4.1.9.1.2228": "Firepower",
+            "1.3.6.1.4.1.9.1.1": "IOS Device",
+        }
+        
+        # Check OID mapping first
+        if object_id:
+            for oid, model in cisco_oid_models.items():
+                if object_id.startswith(oid):
+                    return model
+        
+        # Try to extract from description
+        if description:
+            desc_lower = description.lower()
+            
+            # Cisco software name patterns
+            # Example: "C3750E-UNIVERSALK9-M" -> Catalyst 3750-E
+            # Example: "C2960S-UNIVERSALK9-M" -> Catalyst 2960-S
+            import re
+            
+            # Look for Catalyst model patterns
+            catalyst_match = re.search(r'(catalyst\s*[\d]+[a-z]*)', desc_lower)
+            if catalyst_match:
+                return catalyst_match.group(1).title()
+            
+            # Look for C#### patterns (Cisco shorthand)
+            c_match = re.search(r'\b(c\d{4}[a-z]*)\b', desc_lower)
+            if c_match:
+                model_code = c_match.group(1).upper()
+                # Map common codes
+                if model_code.startswith('C37'):
+                    return f"Catalyst {model_code[1:]}"
+                elif model_code.startswith('C29'):
+                    return f"Catalyst {model_code[1:]}"
+                elif model_code.startswith('C35'):
+                    return f"Catalyst {model_code[1:]}"
+                elif model_code.startswith('C38'):
+                    return f"Catalyst {model_code[1:]}"
+                elif model_code.startswith('C92') or model_code.startswith('C93'):
+                    return f"Catalyst {model_code[1:]}"
+                return f"Cisco {model_code}"
+            
+            # Look for ASA patterns
+            if "asa" in desc_lower:
+                asa_match = re.search(r'asa\s*(\d+)', desc_lower)
+                if asa_match:
+                    return f"ASA {asa_match.group(1)}"
+                return "ASA"
+            
+            # Look for Nexus patterns
+            if "nexus" in desc_lower or "nx-os" in desc_lower:
+                nexus_match = re.search(r'nexus\s*(\d+)', desc_lower)
+                if nexus_match:
+                    return f"Nexus {nexus_match.group(1)}"
+                return "Nexus"
+            
+            # Look for ISR patterns
+            if "isr" in desc_lower:
+                isr_match = re.search(r'isr\s*(\d+)', desc_lower)
+                if isr_match:
+                    return f"ISR {isr_match.group(1)}"
+                return "ISR Router"
+            
+            # FortiGate patterns
+            if "fortigate" in desc_lower:
+                fg_match = re.search(r'fortigate[- ]*(\S+)', desc_lower)
+                if fg_match:
+                    return f"FortiGate {fg_match.group(1)}"
+                return "FortiGate"
+            
+            # Palo Alto patterns
+            if "palo alto" in desc_lower or "pan-os" in desc_lower:
+                return "Palo Alto"
+                
+        return "Unknown"
 
     def _format_neighbors(self, neighbors_raw):
         """
@@ -295,15 +411,22 @@ class DeviceDiscovery:
             neighbor_ip = data.get("neighbor_ip", "")
             remote_port = data.get("remote_port", data.get("remote_port_desc", ""))
             protocol = data.get("protocol", "Unknown")
+            local_if_index = data.get("local_interface", "Unknown")
+            
+            # Resolve local interface name from index using our mapping
+            local_if_name = self._if_index_to_name.get(local_if_index, 
+                            self._if_index_to_name.get(str(local_if_index), f"Interface {local_if_index}"))
             
             # Build destination - prefer IP if available, otherwise use port/chassis info
             destination = neighbor_ip if neighbor_ip else data.get("chassis_id", "")
             
             formatted.append({
                 "Neighbor Name": neighbor_name,
+                "Neighbor ID": neighbor_name,  # CDP/LLDP device ID
                 "Remote Port": remote_port if remote_port else "Unknown",
                 "Destination IP": neighbor_ip if neighbor_ip else "N/A",
-                "Local Interface Index": data.get("local_interface", "Unknown"),
+                "Origin Interface": local_if_name,  # Human-readable interface name
+                "Local Interface Index": local_if_index,
                 "Protocol": protocol,
                 "Platform": data.get("platform", ""),
                 "Details": f"Discovered via {protocol}"

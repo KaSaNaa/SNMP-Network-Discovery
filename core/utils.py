@@ -370,7 +370,7 @@ def classify_device_type(sys_info, interfaces=None):
         return ("Unknown", "Low", ["Insufficient information for classification"])
     
     # Find device type with highest score
-    device_type = max(scores, key=scores.get)
+    device_type = max(scores, key=lambda k: scores.get(k, 0))
     
     # Determine confidence based on score difference
     sorted_scores = sorted(scores.values(), reverse=True)
