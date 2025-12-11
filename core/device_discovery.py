@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from core.snmp_manager import SNMPManager
 
@@ -547,13 +548,51 @@ class DeviceDiscovery:
                 except (IndexError, ValueError):
                     pass
         
-        # Convert neighbor_data dict to formatted list
+        # Log what we found for debugging
+        cdp_count = sum(1 for k in neighbor_data.keys() if k.startswith('cdp_'))
+        lldp_count = sum(1 for k in neighbor_data.keys() if k.startswith('lldp_'))
+        logging.info(f"Neighbor discovery: Found {cdp_count} CDP entries, {lldp_count} LLDP entries")
+        
+        # Merge CDP and LLDP data for the same interface
+        # Build a mapping by local interface index
+        merged_by_interface = {}
+        
         for key, data in neighbor_data.items():
+            local_if_index = data.get("local_interface", "Unknown")
+            protocol = data.get("protocol", "Unknown")
+            
+            if local_if_index not in merged_by_interface:
+                merged_by_interface[local_if_index] = {"cdp": None, "lldp": None}
+            
+            if protocol == "CDP":
+                merged_by_interface[local_if_index]["cdp"] = data
+            elif protocol == "LLDP":
+                merged_by_interface[local_if_index]["lldp"] = data
+        
+        # Convert merged data to formatted list
+        # Prefer CDP over LLDP when both exist for the same interface
+        for local_if_index, protocols in merged_by_interface.items():
+            cdp_data = protocols.get("cdp")
+            lldp_data = protocols.get("lldp")
+            
+            # Prefer CDP if available, otherwise use LLDP
+            if cdp_data:
+                data = cdp_data
+                # If LLDP has additional info that CDP doesn't, merge it
+                if lldp_data:
+                    if not data.get("neighbor_name") and lldp_data.get("neighbor_name"):
+                        data["neighbor_name"] = lldp_data["neighbor_name"]
+                    if not data.get("remote_port") and lldp_data.get("remote_port"):
+                        data["remote_port"] = lldp_data.get("remote_port")
+            elif lldp_data:
+                data = lldp_data
+            else:
+                continue
+            
             neighbor_name = data.get("neighbor_name", "Unknown")
             neighbor_ip = data.get("neighbor_ip", "")
             remote_port = data.get("remote_port", data.get("remote_port_desc", ""))
             protocol = data.get("protocol", "Unknown")
-            local_if_index = data.get("local_interface", "Unknown")
             
             # Resolve local interface name from index using our mapping
             local_if_name = self._if_index_to_name.get(local_if_index, 

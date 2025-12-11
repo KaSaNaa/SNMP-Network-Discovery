@@ -262,6 +262,7 @@ class SNMPManager:
             phys_serial = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.11", use_next_cmd=True)
             phys_model = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.13", use_next_cmd=True)
             phys_descr = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.2", use_next_cmd=True)
+            phys_name = await self.snmp_discovery(target, "1.3.6.1.2.1.47.1.1.1.1.7", use_next_cmd=True)
             
             # Build lookup dictionaries by index
             def build_dict(data):
@@ -275,20 +276,58 @@ class SNMPManager:
             serial_dict = build_dict(phys_serial)
             model_dict = build_dict(phys_model)
             descr_dict = build_dict(phys_descr)
+            name_dict = build_dict(phys_name)
             
-            # Find chassis entries (class=3) or stack entries (class=5)
-            # Priority: chassis (3) > stack (5) > module (9)
-            chassis_idx = None
+            # For switch stacks, find the MASTER switch serial number
+            # Strategy:
+            # 1. Look for chassis entries (class=3)
+            # 2. Among chassis entries, prefer "Switch 1" or "1" (typically the master)
+            # 3. Fall back to the chassis entry with the lowest index
+            
+            chassis_indices = []
             for idx, cls in class_dict.items():
                 if cls == '3':  # Chassis
-                    chassis_idx = idx
-                    break
-                elif cls == '5' and not chassis_idx:  # Container/Stack
-                    chassis_idx = idx
-                elif cls == '9' and not chassis_idx:  # Module
-                    chassis_idx = idx
+                    chassis_indices.append(idx)
             
-            # If no chassis found, try the first entry with a serial number
+            chassis_idx = None
+            
+            if chassis_indices:
+                # First, try to find the master switch by name
+                for idx in chassis_indices:
+                    name = name_dict.get(idx, "").lower()
+                    # Check for master indicators: "1", "switch 1", "master", lowest number
+                    if name in ['1', 'switch 1', 'switch1'] or 'master' in name:
+                        chassis_idx = idx
+                        break
+                
+                # If no master found, look for the switch with the matching description
+                if not chassis_idx:
+                    for idx in chassis_indices:
+                        descr = descr_dict.get(idx, "").lower()
+                        # Check description for master/primary indicators
+                        if 'master' in descr or 'switch 1' in descr:
+                            chassis_idx = idx
+                            break
+                
+                # Still no match - use the chassis with the lowest index (usually master)
+                if not chassis_idx:
+                    # Sort by numeric index
+                    try:
+                        sorted_indices = sorted(chassis_indices, key=lambda x: int(x))
+                        chassis_idx = sorted_indices[0]
+                    except (ValueError, TypeError):
+                        chassis_idx = chassis_indices[0]
+            
+            # If no chassis found, try container (class=5) or module (class=9)
+            if not chassis_idx:
+                for idx, cls in class_dict.items():
+                    if cls == '5':  # Container/Stack
+                        chassis_idx = idx
+                        break
+                    elif cls == '9' and not chassis_idx:  # Module
+                        chassis_idx = idx
+            
+            # If still no chassis found, try the first entry with a serial number
             if not chassis_idx:
                 for idx, serial in serial_dict.items():
                     if serial and serial != "" and serial != "Unknown":
@@ -341,8 +380,26 @@ class SNMPManager:
             return await self.snmp_discovery(ip, lldp_oid)
 
         async def get_cdp_neighbors():
-            cdp_oid = ".1.3.6.1.4.1.9.9.23.1.2.1"
-            return await self.snmp_discovery(ip, cdp_oid)
+            # CDP cache table OIDs - need to walk specific entry columns
+            # cdpCacheEntry: 1.3.6.1.4.1.9.9.23.1.2.1.1
+            # Walking the entry OID directly for all columns
+            cdp_oid = "1.3.6.1.4.1.9.9.23.1.2.1.1"
+            results = await self.snmp_discovery(ip, cdp_oid)
+            
+            # If the generic walk doesn't work, try walking specific columns
+            if not results:
+                logging.info("CDP table walk returned no results, trying specific columns")
+                cdp_columns = [
+                    "1.3.6.1.4.1.9.9.23.1.2.1.1.4",   # cdpCacheAddress
+                    "1.3.6.1.4.1.9.9.23.1.2.1.1.6",   # cdpCacheDeviceId
+                    "1.3.6.1.4.1.9.9.23.1.2.1.1.7",   # cdpCacheDevicePort
+                    "1.3.6.1.4.1.9.9.23.1.2.1.1.8",   # cdpCachePlatform
+                ]
+                for col_oid in cdp_columns:
+                    col_results = await self.snmp_discovery(ip, col_oid)
+                    results.extend(col_results)
+            
+            return results
 
         neighbors.extend(await get_lldp_neighbors())
         neighbors.extend(await get_cdp_neighbors())
