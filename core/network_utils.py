@@ -4,7 +4,6 @@ import platform
 import socket
 import os
 import concurrent.futures
-from core.utils import validate_ip_address 
 
 class NetworkUtils:
     @staticmethod
@@ -76,15 +75,12 @@ class NetworkUtils:
         Returns:
             str: The short hostname if resolution is successful, otherwise the original IP address.
         """
-        if validate_ip_address(ip):
-            try:
-                hostname, _, _ = socket.gethostbyaddr(ip)
-                short_hostname = hostname.split(".")[0]
-                return short_hostname if short_hostname else ip
-            except socket.herror:
-                return ip
-        else:
-            raise ValueError(f"Invalid IP address: {ip}")
+        try:
+            hostname, _, _ = socket.gethostbyaddr(ip)
+            short_hostname = hostname.split(".")[0]
+            return short_hostname if short_hostname else ip
+        except socket.herror:
+            return ip
 
     @staticmethod
     def ping_ip(ip_str):

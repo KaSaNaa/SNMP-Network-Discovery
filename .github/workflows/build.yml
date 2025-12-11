@@ -1,0 +1,73 @@
+name: Build Binaries
+
+on:
+  push:
+    branches: [ "main", "v2" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "v2" ]
+
+jobs:
+  build-standard:
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+            binary_name: snmp-discovery-windows
+          - os: ubuntu-22.04
+            name: Debian
+            binary_name: snmp-discovery-debian
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --onefile --name ${{ matrix.binary_name }} main.py
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.binary_name }}
+        path: dist/
+
+  build-rhel:
+    name: Build on RHEL
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Python and dependencies
+      run: |
+        dnf install -y python3.11 python3.11-pip python3.11-devel gcc binutils
+        python3.11 -m pip install --upgrade pip
+        python3.11 -m pip install -r requirements.txt
+        python3.11 -m pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        python3.11 -m PyInstaller --onefile --name snmp-discovery-rhel main.py
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: snmp-discovery-rhel
+        path: dist/

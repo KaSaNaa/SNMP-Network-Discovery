@@ -3,37 +3,122 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*.*.*'  # Trigger the workflow on version tags
+      - 'v*.*.*'
 
 jobs:
-  release:
-    runs-on: ubuntu-20.04
+  build-standard:
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+            binary_name: snmp-discovery-windows
+            asset_name: snmp-discovery-windows.exe
+          - os: ubuntu-22.04
+            name: Debian
+            binary_name: snmp-discovery-debian
+            asset_name: snmp-discovery-debian
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
-    - name: Zip source code
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
       run: |
-        zip -r source_code.zip .
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
 
-    - name: Create release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: false
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --onefile --name ${{ matrix.binary_name }} main.py
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
       with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: source_code.zip
-        asset_name: source_code.zip
-        asset_content_type: application/zip
+        name: ${{ matrix.binary_name }}
+        path: dist/
+
+  build-rhel:
+    name: Build on RHEL
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Python and dependencies
+      run: |
+        dnf install -y python3.11 python3.11-pip python3.11-devel gcc binutils
+        python3.11 -m pip install --upgrade pip
+        python3.11 -m pip install -r requirements.txt
+        python3.11 -m pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        python3.11 -m PyInstaller --onefile --name snmp-discovery-rhel main.py
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: snmp-discovery-rhel
+        path: dist/
+
+  release:
+    needs: [build-standard, build-rhel]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: snmp-discovery-windows
+        path: dist/windows/
+
+    - name: Download Debian artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: snmp-discovery-debian
+        path: dist/debian/
+
+    - name: Download RHEL artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: snmp-discovery-rhel
+        path: dist/rhel/
+
+    - name: Prepare assets
+      run: |
+        mkdir -p release
+        cp dist/windows/snmp-discovery-windows.exe release/ 2>/dev/null || cp dist/windows/snmp-discovery-windows release/snmp-discovery-windows.exe
+        cp dist/debian/snmp-discovery-debian release/
+        cp dist/rhel/snmp-discovery-rhel release/
+        chmod +x release/snmp-discovery-debian release/snmp-discovery-rhel
+        zip -r release/source-code.zip . -x ".git/*" -x "dist/*" -x "release/*" -x "build/*" -x "__pycache__/*"
+        ls -la release/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Release ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+        generate_release_notes: true
+        files: |
+          release/snmp-discovery-windows.exe
+          release/snmp-discovery-debian
+          release/snmp-discovery-rhel
+          release/source-code.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
