@@ -2,18 +2,25 @@ name: Build Binaries
 
 on:
   push:
-    branches: [ "v2" ]
+    branches: [ "main", "v2" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "v2" ]
+    branches: [ "main", "v2" ]
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
+  build-standard:
+    name: Build on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: windows-latest
+            name: Windows
+            binary_name: snmp-discovery-windows
+          - os: ubuntu-22.04
+            name: Debian
+            binary_name: snmp-discovery-debian
 
     steps:
     - uses: actions/checkout@v4
@@ -29,18 +36,38 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    - name: Build with PyInstaller (Linux)
-      if: runner.os == 'Linux'
+    - name: Build with PyInstaller
       run: |
-        pyinstaller --onefile --name snmp-discovery-linux main.py
-
-    - name: Build with PyInstaller (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        pyinstaller --onefile --name snmp-discovery-windows.exe main.py
+        pyinstaller --onefile --name ${{ matrix.binary_name }} main.py
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: snmp-discovery-${{ matrix.os }}
+        name: ${{ matrix.binary_name }}
+        path: dist/
+
+  build-rhel:
+    name: Build on RHEL
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Python and dependencies
+      run: |
+        dnf install -y python3.11 python3.11-pip python3.11-devel gcc binutils
+        python3.11 -m pip install --upgrade pip
+        python3.11 -m pip install -r requirements.txt
+        python3.11 -m pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        python3.11 -m PyInstaller --onefile --name snmp-discovery-rhel main.py
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: snmp-discovery-rhel
         path: dist/
