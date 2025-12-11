@@ -2,10 +2,10 @@ name: Build Binaries
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "v2" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "v2" ]
 
 jobs:
   build:
