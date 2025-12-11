@@ -23,3 +23,9 @@ snmp_discovery.json
 data/discovered_devices.json
 discovery_results/
 test_fix.json
+cisco_switch_1.json
+dell_switch_2.json
+SNMP Discovery - Device Details - Cisco Switch Neighbors.csv
+SNMP Discovery - Device Details - Cisco Switch Network Adaptetrs.csv
+SNMP Discovery - Device Details - Cisco Switch Ports.csv
+SNMP Discovery - Device Details - Cisco Switch.csv
