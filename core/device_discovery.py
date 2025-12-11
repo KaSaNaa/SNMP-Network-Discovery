@@ -159,13 +159,14 @@ class DeviceDiscovery:
         serial_number = entity_info.get("serial_number", "Unknown")
 
         # 10. Separate Network Adapters (interfaces with IPs) from Ports (physical interfaces)
-        # Network Adapters: Any interface that has an IP address assigned
-        # Ports/Interfaces: Physical ports/interfaces (for switches) or all interfaces
+        # Network Adapters: Any interface that has an IP address assigned (management/L3 interfaces)
+        # Ports: Only PHYSICAL interfaces (switch ports, router interfaces) - excludes VLANs, Loopbacks, etc.
         network_adapters = []
         ports = []
         
         for iface in interfaces:
             # Network Adapters are interfaces with IP addresses assigned
+            # This is the device's network identity (how you manage/reach it)
             if iface.get("ips"):
                 for ip_info in iface.get("ips"):
                     network_adapters.append({
@@ -175,18 +176,17 @@ class DeviceDiscovery:
                         "MAC Address": iface.get("mac")
                     })
             
-            # Add to ports list (physical interfaces)
-            # Determine if it's a physical port based on ifType and name
+            # Ports: Only include PHYSICAL interfaces (matching client's expectation)
+            # Excludes: VLANs, Loopbacks, Tunnels, Null interfaces, etc.
             is_physical = is_physical_interface(iface)
             
-            ports.append({
-                "Interface Name": iface.get("name"),
-                "Interface Number": iface.get("index"),
-                "MAC Address": iface.get("mac"),
-                "Status": iface.get("status"),
-                "Type": "Physical" if is_physical else "Logical",
-                "IPs": iface.get("ips", [])
-            })
+            if is_physical:
+                ports.append({
+                    "Interface Name": iface.get("name"),
+                    "Interface Number": iface.get("index"),
+                    "MAC Address": iface.get("mac"),
+                    "Status": iface.get("status")
+                })
 
         # 11. Construct Final JSON
         self.device_data = {
@@ -205,11 +205,11 @@ class DeviceDiscovery:
         }
         
         # Add Type specific details
-        # Network Adapters: Interfaces with IP addresses
-        # Interfaces/Ports: All interfaces with physical/logical indicator
+        # Network Adapters: Interfaces with IP addresses (management/L3 interfaces)
+        # Ports: Physical interfaces only (switch ports, router interfaces)
         self.device_data["Details"] = {
             "Network Adapters": network_adapters,
-            "Interfaces": ports,
+            "Ports": ports,
             "Neighbors": neighbors_formatted
         }
         
