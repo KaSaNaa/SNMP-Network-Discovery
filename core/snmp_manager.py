@@ -421,15 +421,16 @@ class SNMPManager:
 
     async def get_full_interface_details(self, target):
         """
-        Retrieves detailed interface information including Name, Mac, Status.
+        Retrieves detailed interface information including Name, Mac, Status, Type.
         Uses ifXTable (ifName) for better interface names on modern devices.
+        Also retrieves ifType to distinguish physical adapters from logical interfaces.
         """
         interfaces = []
         # ifTable/ifXTable columns
         # ifIndex: .1.3.6.1.2.1.2.2.1.1
         # ifDescr: .1.3.6.1.2.1.2.2.1.2 (basic name)
         # ifName: .1.3.6.1.2.1.31.1.1.1.1 (better name from ifXTable)
-        # ifType: .1.3.6.1.2.1.2.2.1.3
+        # ifType: .1.3.6.1.2.1.2.2.1.3 (interface type - physical vs logical)
         # ifPhysAddress: .1.3.6.1.2.1.2.2.1.6
         # ifAdminStatus: .1.3.6.1.2.1.2.2.1.7
         # ifOperStatus: .1.3.6.1.2.1.2.2.1.8
@@ -446,6 +447,9 @@ class SNMPManager:
         
         # Fallback to ifDescr if ifName is not available
         if_descr = await get_column("1.3.6.1.2.1.2.2.1.2")
+        
+        # Get ifType to distinguish physical adapters from logical interfaces
+        if_types = await get_column("1.3.6.1.2.1.2.2.1.3")
         
         # Merge: prefer ifName, fallback to ifDescr
         names = {}
@@ -535,7 +539,8 @@ class SNMPManager:
                 "description": alias if alias else "",
                 "mac": mac_formatted,
                 "status": status,
-                "ips": if_ip_map.get(idx, [])
+                "ips": if_ip_map.get(idx, []),
+                "if_type": if_types.get(idx, "0")  # ifType for physical vs logical detection
             }
             interfaces.append(if_data)
             

@@ -220,6 +220,18 @@ def classify_device_type(sys_info, interfaces=None):
         elif "1.3.6.1.4.1.25461" in object_id:  # Palo Alto
             scores["Firewall"] += 40
             indicators.append("Palo Alto device detected (likely firewall)")
+        elif "1.3.6.1.4.1.2620" in object_id:  # CheckPoint
+            scores["Firewall"] += 45
+            indicators.append("CheckPoint device detected (firewall vendor)")
+        elif "1.3.6.1.4.1.8741" in object_id:  # SonicWall
+            scores["Firewall"] += 40
+            indicators.append("SonicWall device detected (firewall vendor)")
+        elif "1.3.6.1.4.1.3097" in object_id:  # WatchGuard
+            scores["Firewall"] += 40
+            indicators.append("WatchGuard device detected (firewall vendor)")
+        elif "1.3.6.1.4.1.2604" in object_id:  # Sophos
+            scores["Firewall"] += 40
+            indicators.append("Sophos device detected (firewall vendor)")
         elif "1.3.6.1.4.1.25506" in object_id:  # H3C/HP
             indicators.append("H3C/HP device detected")
         elif "1.3.6.1.4.1.674" in object_id:  # Dell
@@ -319,20 +331,34 @@ def classify_device_type(sys_info, interfaces=None):
         has_routing_interfaces = False
         has_wan_interfaces = False
         has_vlan_interfaces = False
+        has_vpn_interfaces = False
+        vpn_interface_count = 0
         ports_without_ip = 0
         ports_with_ip = 0
         total_ports = len(interfaces)
         
         for iface in interfaces:
             name = iface.get("name", "").lower()
+            desc = iface.get("description", "").lower()
             ips = iface.get("ips", [])
             
             # Check for VLAN/SVI interfaces (strong switch indicator)
             if any(x in name for x in ["vlan", "svi", "bvi"]):
                 has_vlan_interfaces = True
             
-            # Check for routing-specific interfaces
-            if any(x in name for x in ["serial", "tunnel", "gre", "wan", "pos", "atm"]):
+            # Check for VPN tunnel interfaces (strong firewall indicator)
+            # Common on CheckPoint, Fortinet, Palo Alto firewalls
+            if any(x in name for x in ["vpn", "vpnt", "ipsec", "ssl.", "sslvpn"]):
+                has_vpn_interfaces = True
+                vpn_interface_count += 1
+            
+            # Check description for VPN indicators
+            if any(x in desc for x in ["vpn", "ipsec", "tunnel"]):
+                has_vpn_interfaces = True
+            
+            # Check for routing-specific interfaces (exclude gre/tunnel as they're ambiguous)
+            # GRE and tunnels are used by both routers AND firewalls
+            if any(x in name for x in ["serial", "wan", "pos", "atm", "t1", "e1"]):
                 has_routing_interfaces = True
                 has_wan_interfaces = True
             
@@ -343,12 +369,22 @@ def classify_device_type(sys_info, interfaces=None):
                 if not any(x in name for x in ["null", "loopback", "lo"]):
                     ports_without_ip += 1
         
+        # VPN interfaces are strong firewall indicators
+        if has_vpn_interfaces:
+            # Multiple VPN tunnels is very strong firewall indicator
+            if vpn_interface_count >= 3:
+                scores["Firewall"] += 35
+                indicators.append(f"Has multiple VPN tunnel interfaces ({vpn_interface_count}) - typical of firewall")
+            else:
+                scores["Firewall"] += 20
+                indicators.append("Has VPN tunnel interfaces (typical of firewall)")
+        
         # VLAN interfaces are strong switch indicators
         if has_vlan_interfaces:
             scores["Switch"] += 20
             indicators.append("Has VLAN/SVI interfaces (typical of switches)")
         
-        # WAN/Serial interfaces suggest router
+        # WAN/Serial interfaces suggest router (only dedicated WAN interfaces, not tunnels)
         if has_wan_interfaces:
             scores["Router"] += 20
             indicators.append("Has WAN/Serial interfaces (typical of routers)")

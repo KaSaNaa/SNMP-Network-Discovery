@@ -1,5 +1,114 @@
 import json
+import re
 from core.snmp_manager import SNMPManager
+
+# ifType values for physical network adapters (from IANA ifType definitions)
+PHYSICAL_IF_TYPES = {
+    '6': 'ethernetCsmacd',      # Ethernet
+    '7': 'iso88023Csmacd',      # IEEE 802.3
+    '9': 'iso88025TokenRing',   # Token Ring
+    '15': 'fddi',               # FDDI
+    '26': 'fastEther',          # Fast Ethernet (100Mbps)
+    '62': 'fastEtherFX',        # Fast Ethernet FX
+    '69': 'fastEther100FX',     # Fast Ethernet 100FX  
+    '71': 'ieee80211',          # Wireless (WiFi)
+    '117': 'gigabitEthernet',   # Gigabit Ethernet
+    '169': 'tenGigabitEthernet', # 10 Gigabit Ethernet
+    '209': 'bridge',            # Bridge interface (physical on some devices)
+}
+
+# ifType values for logical/virtual interfaces
+LOGICAL_IF_TYPES = {
+    '1': 'other',               # Other (often virtual)
+    '23': 'ppp',                # PPP
+    '24': 'softwareLoopback',   # Loopback
+    '53': 'propVirtual',        # Proprietary Virtual
+    '131': 'tunnel',            # Tunnel
+    '135': 'l2vlan',            # Layer 2 VLAN
+    '136': 'l3ipvlan',          # Layer 3 IP VLAN
+    '150': 'mplsTunnel',        # MPLS Tunnel
+    '161': 'ieee8023adLag',     # Link Aggregation (Port Channel)
+}
+
+def is_physical_interface(iface):
+    """
+    Determine if an interface is a physical network adapter based on ifType,
+    MAC address presence, and interface name patterns.
+    
+    Physical adapters typically have:
+    - A non-zero MAC address
+    - ifType indicating physical media (6=ethernet, 71=wireless, etc.)
+    - Names like eth*, en*, em*, GigabitEthernet*, FastEthernet*, etc.
+    
+    Logical/virtual interfaces typically have:
+    - No MAC address or null MAC
+    - ifType indicating virtual (24=loopback, 135=vlan, 131=tunnel)
+    - Names containing 'vlan', 'loopback', 'tunnel', 'vpn', 'gre', etc.
+    """
+    name = iface.get("name", "").lower()
+    mac = iface.get("mac", "")
+    if_type = str(iface.get("if_type", "0"))
+    
+    # Check ifType first - most reliable
+    if if_type in PHYSICAL_IF_TYPES:
+        return True
+    if if_type in LOGICAL_IF_TYPES:
+        return False
+    
+    # Patterns that indicate LOGICAL/VIRTUAL interfaces
+    logical_patterns = [
+        r'^lo$', r'^lo\d*$',           # Loopback
+        r'loopback',
+        r'vlan', r'^vl\d+$', r'^svi',  # VLAN interfaces
+        r'tunnel', r'^tu\d+',          # Tunnel interfaces
+        r'vpn', r'^vpnt',              # VPN tunnel interfaces
+        r'^gre', r'gretap',            # GRE tunnels
+        r'^ipsec',                     # IPSec tunnels
+        r'^null', r'^nu\d',            # Null interfaces
+        r'virtual', r'miniport',       # Virtual/miniport
+        r'^bridge', r'^br\d',          # Bridge interfaces (sometimes logical)
+        r'^bond', r'^team',            # Bond/Team interfaces
+        r'^port-channel', r'^po\d',    # Port channels (logical aggregation)
+        r'^lag',                       # LAG interfaces
+        r'erspan',                     # ERSPAN
+    ]
+    
+    for pattern in logical_patterns:
+        if re.search(pattern, name):
+            return False
+    
+    # Patterns that indicate PHYSICAL interfaces
+    physical_patterns = [
+        r'^eth\d+$',                    # eth0, eth1 (base physical)
+        r'^en[osp]\d',                  # eno1, enp0s3, ens192 (systemd naming)
+        r'^em\d',                       # em1, em2 (embedded)
+        r'gigabitethernet', r'^gi\d', r'^ge\d',   # Gigabit Ethernet
+        r'fastethernet', r'^fa\d', r'^fe\d',      # Fast Ethernet
+        r'tengigabitethernet', r'^te\d',          # 10G Ethernet
+        r'hundredgige', r'^hu\d',                 # 100G Ethernet
+        r'^mgmt', r'^management',                  # Management interfaces (usually physical)
+        r'^serial', r'^se\d',                      # Serial interfaces
+        r'^wlan', r'^wifi', r'^wl\d',             # Wireless
+    ]
+    
+    for pattern in physical_patterns:
+        if re.search(pattern, name):
+            # Base physical interface (not a subinterface with dot notation)
+            if '.' not in name:
+                return True
+    
+    # Check MAC address - physical interfaces usually have valid MAC
+    # A valid MAC is non-empty, not all zeros, and has proper format
+    if mac and mac not in ['', '00:00:00:00:00:00', '0']:
+        # Has MAC - likely physical, unless name suggests otherwise
+        # Subinterfaces (eth0.100) have MAC but are logical
+        if '.' in name and any(p in name for p in ['eth', 'en', 'gi', 'fa', 'te']):
+            return False  # Subinterface
+        return True
+    
+    # Default to logical if we can't determine
+    return False
+
 
 class DeviceDiscovery:
     def __init__(self, ip, version=2, community='public', user=None, auth_key=None, priv_key=None, auth_protocol=None, priv_protocol=None):
@@ -49,7 +158,37 @@ class DeviceDiscovery:
         # 9. Get Serial Number from ENTITY-MIB
         serial_number = entity_info.get("serial_number", "Unknown")
 
-        # 10. Construct Final JSON
+        # 10. Separate Network Adapters (interfaces with IPs) from Ports (physical interfaces)
+        # Network Adapters: Any interface that has an IP address assigned
+        # Ports/Interfaces: Physical ports/interfaces (for switches) or all interfaces
+        network_adapters = []
+        ports = []
+        
+        for iface in interfaces:
+            # Network Adapters are interfaces with IP addresses assigned
+            if iface.get("ips"):
+                for ip_info in iface.get("ips"):
+                    network_adapters.append({
+                        "Name": iface.get("name"),
+                        "IP Address": ip_info.get("ip"),
+                        "Netmask": ip_info.get("mask"),
+                        "MAC Address": iface.get("mac")
+                    })
+            
+            # Add to ports list (physical interfaces)
+            # Determine if it's a physical port based on ifType and name
+            is_physical = is_physical_interface(iface)
+            
+            ports.append({
+                "Interface Name": iface.get("name"),
+                "Interface Number": iface.get("index"),
+                "MAC Address": iface.get("mac"),
+                "Status": iface.get("status"),
+                "Type": "Physical" if is_physical else "Logical",
+                "IPs": iface.get("ips", [])
+            })
+
+        # 11. Construct Final JSON
         self.device_data = {
             "Device Name": system_info.get("name", "Unknown"),
             "Device Type": device_type,
@@ -66,8 +205,11 @@ class DeviceDiscovery:
         }
         
         # Add Type specific details
+        # Network Adapters: Interfaces with IP addresses
+        # Interfaces/Ports: All interfaces with physical/logical indicator
         self.device_data["Details"] = {
-            "Interfaces": interfaces,
+            "Network Adapters": network_adapters,
+            "Interfaces": ports,
             "Neighbors": neighbors_formatted
         }
         
