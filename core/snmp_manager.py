@@ -147,8 +147,20 @@ class SNMPManager:
                     continue
                 else:
                     for varBind in varBinds:
-                        oid_str, value_str = varBind
-                        results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+                        oid, value = varBind
+                        # Clean numeric OID string
+                        oid_str = str(oid)
+                        
+                        # Subtree Validation: Verify the returned OID actually belongs to the requested base_oid
+                        # Standard SNMP walk (next_cmd) continues until the end of MIB view if not stopped using lexicographical check
+                        if base_oid and not oid_str.startswith(base_oid):
+                            # We have gone past the requested subtree
+                            # Stop the iterator/loop. But since we are in async for loop from library, we break
+                            # However, pysnmp's walk_cmd might arguably handle this if configured? 
+                            # Usually simple walk implementations need this check manually.
+                            return results 
+
+                        results.append((oid_str, value.prettyPrint()))
         else:
            # get_cmd is a coroutine that returns a single tuple - await it directly
             errorIndication, errorStatus, errorIndex, varBinds = await get_cmd(
@@ -165,8 +177,9 @@ class SNMPManager:
                     logging.error(f'Error Status: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or "?"}')
             else:
                 for varBind in varBinds:
-                    oid_str, value_str = varBind
-                    results.append((oid_str.prettyPrint(), value_str.prettyPrint()))
+                    oid, value = varBind
+                    # For get_cmd usually we get what we asked for, but consistency helps
+                    results.append((str(oid), value.prettyPrint()))
         
         return results
 
@@ -192,18 +205,10 @@ class SNMPManager:
     def _decode_hex_string(self, value):
         """
         Detects if a string is hex-encoded (starts with 0x) and decodes it.
+        Uses the centralized decode_hex_string function from utils.
         """
-        if isinstance(value, str) and value.startswith("0x"):
-            try:
-                # Remove 0x prefix and decode
-                hex_str = value[2:]
-                decoded_bytes = bytes.fromhex(hex_str)
-                # Try decoding as utf-8, fallback to latin-1 if needed
-                return decoded_bytes.decode('utf-8')
-            except Exception as e:
-                logging.debug(f"Failed to decode hex string {value}: {e}")
-                return value
-        return value
+        from core.utils import decode_hex_string
+        return decode_hex_string(value)
 
     async def get_system_info(self, target):
         """
