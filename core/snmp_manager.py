@@ -189,6 +189,22 @@ class SNMPManager:
             logging.error(f"SNMP validation failed for {target}: {e}")
             return False
 
+    def _decode_hex_string(self, value):
+        """
+        Detects if a string is hex-encoded (starts with 0x) and decodes it.
+        """
+        if isinstance(value, str) and value.startswith("0x"):
+            try:
+                # Remove 0x prefix and decode
+                hex_str = value[2:]
+                decoded_bytes = bytes.fromhex(hex_str)
+                # Try decoding as utf-8, fallback to latin-1 if needed
+                return decoded_bytes.decode('utf-8')
+            except Exception as e:
+                logging.debug(f"Failed to decode hex string {value}: {e}")
+                return value
+        return value
+
     async def get_system_info(self, target):
         """
         Retrieve basic system information (Name, Description, ObjectID, Uptime, Contact, Location).
@@ -207,7 +223,11 @@ class SNMPManager:
         for key, oid in oids.items():
             result = await self.snmp_discovery(target, oid, use_next_cmd=False)
             if result:
-                sys_info[key] = result[0][1]
+                value = result[0][1]
+                # Apply hex decoding specifically for description, or potentially others
+                if key == "description":
+                    value = self._decode_hex_string(value)
+                sys_info[key] = value
             else:
                 sys_info[key] = "Unknown"
         

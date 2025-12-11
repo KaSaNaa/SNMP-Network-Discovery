@@ -23,6 +23,28 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
+## Building from Source
+
+To create a standalone executable binary using [PyInstaller](https://pyinstaller.org/):
+
+### Prerequisites
+- Python 3.8+
+- pip
+
+### Local Build (Linux)
+Run the provided build script:
+```bash
+./build_binary.sh
+```
+The executable will be located in `dist/snmp-discovery-linux`.
+
+### Cross-Platform via GitHub Actions
+This project includes a **GitHub Actions** workflow to automatically build binaries for **Linux** and **Windows**.
+1. Push to the `main` branch or create a tag (e.g., `v1.0.0`).
+2. Go to the "Actions" tab in your GitHub repository.
+3. Select the "Build Binaries" workflow.
+4. Download the artifacts (zip files) from the completed run.
+
 ## Usage
 
 ### Basic Syntax
